@@ -1,11 +1,17 @@
-from app.models.schemas import ContentResponse
+from app.models.schemas import (
+    ContentResponse,
+    NormalizedContent,
+)
 
 
-async def analyze_content(text: str) -> ContentResponse:
+async def analyze_content(
+    content: NormalizedContent,
+) -> ContentResponse:
+
     return ContentResponse(
-        input_type="text",
+        input_type=content.source_type,
         title="Content analysis result",
-        summary=f"Mock analysis: {text}",
+        summary=f"Mock analysis: {content.content}",
         importance=50,
         category="other",
     )

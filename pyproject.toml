@@ -12,13 +12,14 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
+    "httpx",
+    "beautifulsoup4",
 ]
 
 
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "httpx",
 ]
 
 
