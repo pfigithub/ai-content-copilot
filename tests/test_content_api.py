@@ -62,3 +62,37 @@ def test_analyze_content_with_url(monkeypatch):
     )
     assert body["importance"] == 50
     assert body["category"] == "other"
+    
+def test_analyze_pdf(monkeypatch):
+
+    def fake_extract_text_from_pdf(
+        file_path,
+    ):
+        return (
+            "PDF test content for "
+            "the content service."
+        )
+
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.content.extract_text_from_pdf",
+        fake_extract_text_from_pdf,
+    )
+
+    response = client.post(
+        "/api/v1/content/analyze-pdf",
+        files={
+            "file": (
+                "test.pdf",
+                b"fake pdf bytes",
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["input_type"] == "pdf"
+    assert body["title"] == "Content analysis result"
+    assert body["importance"] == 50

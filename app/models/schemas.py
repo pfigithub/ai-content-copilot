@@ -51,12 +51,20 @@ class ContentRequest(BaseModel):
 
 class NormalizedContent(BaseModel):
     content: str
-    source_type: Literal["text", "url"]
+    source_type: Literal[
+        "text",
+        "url",
+        "pdf",
+    ]
     source: str | None = None
 
 
 class ContentResponse(BaseModel):
-    input_type: Literal["text", "url"]
+    input_type: Literal[
+        "text",
+        "url",
+        "pdf",
+    ]
     title: str
     summary: str
     importance: int = Field(
