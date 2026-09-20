@@ -1,12 +1,22 @@
 import os
 import tempfile
+from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    UploadFile,
+)
+
+from app.dependencies import get_ai_provider
 
 from app.models.schemas import (
     ContentRequest,
     ContentResponse,
 )
+
+from app.providers.ai_provider import AIProvider
 
 from app.services.content_service import (
     analyze_content,
@@ -33,13 +43,19 @@ router = APIRouter(
 )
 async def analyze_content_endpoint(
     request: ContentRequest,
+    ai_provider: Annotated[
+        AIProvider,
+        Depends(get_ai_provider),
+    ],
 ):
+
     normalized_content = await normalize_content(
         request
     )
 
     return await analyze_content(
-        normalized_content
+        normalized_content,
+        ai_provider,
     )
 
 
@@ -48,8 +64,13 @@ async def analyze_content_endpoint(
     response_model=ContentResponse,
 )
 async def analyze_pdf_endpoint(
+    ai_provider: Annotated[
+        AIProvider,
+        Depends(get_ai_provider),
+    ],
     file: UploadFile = File(...),
 ):
+
     suffix = os.path.splitext(
         file.filename or ""
     )[1]
@@ -63,7 +84,9 @@ async def analyze_pdf_endpoint(
 
         try:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = await file.read(
+                    1024 * 1024
+                )
 
                 if not chunk:
                     break
@@ -78,16 +101,19 @@ async def analyze_pdf_endpoint(
             temp_path
         )
 
+        normalized_content = type(
+            "NormalizedContentData",
+            (),
+            {
+                "content": text,
+                "source_type": "pdf",
+                "source": file.filename,
+            },
+        )()
+
         return await analyze_content(
-            type(
-                "NormalizedContentData",
-                (),
-                {
-                    "content": text,
-                    "source_type": "pdf",
-                    "source": file.filename,
-                },
-            )()
+            normalized_content,
+            ai_provider,
         )
 
     finally:
