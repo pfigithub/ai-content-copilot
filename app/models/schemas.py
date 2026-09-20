@@ -51,12 +51,24 @@ class ContentRequest(BaseModel):
 
 class NormalizedContent(BaseModel):
     content: str
+
     source_type: Literal[
         "text",
         "url",
         "pdf",
     ]
+
     source: str | None = None
+
+
+class AIContentResult(BaseModel):
+    title: str
+    summary: str
+    importance: int = Field(
+        ge=1,
+        le=100,
+    )
+    category: str
 
 
 class ContentResponse(BaseModel):
@@ -65,10 +77,13 @@ class ContentResponse(BaseModel):
         "url",
         "pdf",
     ]
+
     title: str
     summary: str
+
     importance: int = Field(
         ge=1,
         le=100,
     )
+
     category: str

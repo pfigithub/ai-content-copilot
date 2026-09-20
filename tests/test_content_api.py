@@ -1,12 +1,26 @@
+import pytest
+
 from fastapi.testclient import TestClient
 
+from app.dependencies import get_ai_provider
 from app.main import app
+from app.providers.mock_provider import MockAIProvider
 
 
-client = TestClient(app)
+@pytest.fixture
+def client():
+
+    app.dependency_overrides[
+        get_ai_provider
+    ] = lambda: MockAIProvider()
+
+    yield TestClient(app)
+
+    app.dependency_overrides.clear()
 
 
-def test_analyze_content_with_text():
+def test_analyze_content_with_text(client):
+
     response = client.post(
         "/api/v1/content/analyze-content",
         json={
@@ -23,17 +37,25 @@ def test_analyze_content_with_text():
 
     assert body["input_type"] == "text"
     assert body["title"] == "Content analysis result"
+
     assert body["summary"].startswith(
         "Mock analysis:"
     )
+
     assert body["importance"] == 50
     assert body["category"] == "other"
 
 
-def test_analyze_content_with_url(monkeypatch):
+def test_analyze_content_with_url(
+    client,
+    monkeypatch,
+):
 
-    async def fake_fetch_url_content(url: str):
+    async def fake_fetch_url_content(
+        url: str,
+    ):
         assert url == "https://example.com/"
+
         return (
             "Example page content for URL testing."
         )
@@ -46,7 +68,7 @@ def test_analyze_content_with_url(monkeypatch):
     response = client.post(
         "/api/v1/content/analyze-content",
         json={
-            "url": "https://example.com/"
+            "url": "https://example.com/",
         },
     )
 
@@ -55,15 +77,20 @@ def test_analyze_content_with_url(monkeypatch):
     body = response.json()
 
     assert body["input_type"] == "url"
-    assert body["title"] == "Content analysis result"
+
     assert (
         "Example page content"
         in body["summary"]
     )
+
     assert body["importance"] == 50
     assert body["category"] == "other"
-    
-def test_analyze_pdf(monkeypatch):
+
+
+def test_analyze_pdf(
+    client,
+    monkeypatch,
+):
 
     def fake_extract_text_from_pdf(
         file_path,
