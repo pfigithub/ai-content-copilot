@@ -2,6 +2,7 @@ import pymupdf
 import pytest
 
 from app.services.pdf_service import (
+    _order_line_words,
     extract_text_from_pdf,
 )
 
@@ -45,11 +46,85 @@ def test_rejects_unreadable_pdf(tmp_path):
     )
 
     document = pymupdf.open()
+
     document.new_page()
+
     document.save(pdf_path)
+
     document.close()
 
     with pytest.raises(ValueError):
+
         extract_text_from_pdf(
             pdf_path
         )
+
+
+def test_orders_rtl_words_from_right_to_left():
+
+    words = [
+        (
+            50.0,
+            100.0,
+            100.0,
+            115.0,
+            "مذاکره",
+            0,
+            0,
+            0,
+        ),
+        (
+            120.0,
+            100.0,
+            160.0,
+            115.0,
+            "اصول",
+            0,
+            0,
+            1,
+        ),
+    ]
+
+    result = _order_line_words(
+        words
+    )
+
+    assert result == [
+        "اصول",
+        "مذاکره",
+    ]
+
+
+def test_preserves_ltr_word_order():
+
+    words = [
+        (
+            10.0,
+            100.0,
+            50.0,
+            115.0,
+            "Artificial",
+            0,
+            0,
+            0,
+        ),
+        (
+            60.0,
+            100.0,
+            100.0,
+            115.0,
+            "intelligence",
+            0,
+            0,
+            1,
+        ),
+    ]
+
+    result = _order_line_words(
+        words
+    )
+
+    assert result == [
+        "Artificial",
+        "intelligence",
+    ]

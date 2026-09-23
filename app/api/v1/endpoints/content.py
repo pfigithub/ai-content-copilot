@@ -6,14 +6,19 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     UploadFile,
 )
 
 from app.dependencies import get_ai_provider
 
 from app.models.schemas import (
+    AnalysisContentResponse,
     ContentRequest,
-    ContentResponse,
+    IdeasContentResponse,
+    NormalizedContent,
+    SummaryContentResponse,
+    TaskName,
 )
 
 from app.providers.ai_provider import AIProvider
@@ -30,6 +35,9 @@ from app.services.pdf_service import (
     extract_text_from_pdf,
 )
 
+from app.services.language_service import (
+    detect_language,
+)
 
 router = APIRouter(
     prefix="/api/v1/content",
@@ -37,9 +45,16 @@ router = APIRouter(
 )
 
 
+ContentResponseModel = (
+    SummaryContentResponse
+    | AnalysisContentResponse
+    | IdeasContentResponse
+)
+
+
 @router.post(
     "/analyze-content",
-    response_model=ContentResponse,
+    response_model=ContentResponseModel,
 )
 async def analyze_content_endpoint(
     request: ContentRequest,
@@ -49,8 +64,10 @@ async def analyze_content_endpoint(
     ],
 ):
 
-    normalized_content = await normalize_content(
-        request
+    normalized_content = (
+        await normalize_content(
+            request
+        )
     )
 
     return await analyze_content(
@@ -61,7 +78,7 @@ async def analyze_content_endpoint(
 
 @router.post(
     "/analyze-pdf",
-    response_model=ContentResponse,
+    response_model=ContentResponseModel,
 )
 async def analyze_pdf_endpoint(
     ai_provider: Annotated[
@@ -69,6 +86,12 @@ async def analyze_pdf_endpoint(
         Depends(get_ai_provider),
     ],
     file: UploadFile = File(...),
+    task: TaskName | None = Form(
+        default=None
+    ),
+    instruction: str | None = Form(
+        default=None
+    ),
 ):
 
     suffix = os.path.splitext(
@@ -83,7 +106,9 @@ async def analyze_pdf_endpoint(
         temp_path = temp_file.name
 
         try:
+
             while True:
+
                 chunk = await file.read(
                     1024 * 1024
                 )
@@ -94,22 +119,32 @@ async def analyze_pdf_endpoint(
                 temp_file.write(chunk)
 
         finally:
+
             await file.close()
 
     try:
+
         text = extract_text_from_pdf(
             temp_path
         )
+        
+        # بهینه‌سازی: تشخیص زبان یک بار انجام و ذخیره می‌شود
+        detected_lang = detect_language(text)
 
-        normalized_content = type(
-            "NormalizedContentData",
-            (),
-            {
-                "content": text,
-                "source_type": "pdf",
-                "source": file.filename,
-            },
-        )()
+        normalized_content = (
+            NormalizedContent(
+                content=text,
+                source_type="pdf",
+                source=file.filename,
+                task=task,
+                instruction=(
+                    instruction.strip()
+                    if instruction
+                    else None
+                ),
+                source_language=detected_lang,
+            )
+        )
 
         return await analyze_content(
             normalized_content,
@@ -117,4 +152,5 @@ async def analyze_pdf_endpoint(
         )
 
     finally:
+
         os.remove(temp_path)

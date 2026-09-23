@@ -9,6 +9,7 @@ version = "0.1.0.dev0"
 description = "A local-first AI content and research copilot built with FastAPI and Ollama."
 readme = "README.md"
 requires-python = ">=3.13"
+
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -16,8 +17,11 @@ dependencies = [
     "beautifulsoup4",
     "pymupdf",
     "python-multipart",
+    "pydantic>=2",
     "pydantic-settings",
     "python-dotenv",
+    "lingua-language-detector",
+    "langcodes[data]",
 ]
 
 
