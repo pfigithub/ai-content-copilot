@@ -3,6 +3,9 @@ from pathlib import Path
 
 import pymupdf
 
+from app.exceptions import (
+    PDFExtractionError,
+)
 
 def _is_rtl_character(
     character: str,
@@ -149,9 +152,7 @@ def extract_text_from_pdf(
 
     except Exception as exc:
 
-        raise ValueError(
-            "The PDF could not be opened or processed."
-        ) from exc
+        raise PDFExtractionError() from exc
 
     text = "\n".join(
         pages
@@ -159,15 +160,11 @@ def extract_text_from_pdf(
 
     if len(text) < 20:
 
-        raise ValueError(
-            "The PDF does not contain enough readable text."
-        )
+        raise PDFExtractionError()
 
     if "\ufffd" in text:
 
-        raise ValueError(
-            "The PDF text could not be decoded reliably."
-        )
+        raise PDFExtractionError()
 
     private_use_chars = sum(
         1
@@ -182,8 +179,6 @@ def extract_text_from_pdf(
         and private_use_chars / len(text) > 0.05
     ):
 
-        raise ValueError(
-            "The PDF text extraction appears unreliable."
-        )
+        raise PDFExtractionError()
 
     return text

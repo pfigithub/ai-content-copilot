@@ -1,21 +1,37 @@
 import httpx
 
-from app.services.html_service import extract_text_from_html
+from app.exceptions import (
+    URLFetchError,
+)
+from app.services.html_service import (
+    extract_text_from_html,
+)
 
 
-async def fetch_url_content(url: str) -> str:
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=15.0,
-        headers={
-            "User-Agent": "AI-Content-Copilot/0.1",
-        },
-    ) as client:
+DEFAULT_TIMEOUT = 20.0
 
-        response = await client.get(url)
 
-        response.raise_for_status()
+async def fetch_url_content(
+    url: str,
+) -> str:
 
-        return extract_text_from_html(
-            response.text
-        )
+    try:
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=DEFAULT_TIMEOUT,
+        ) as client:
+
+            response = await client.get(
+                url
+            )
+
+            response.raise_for_status()
+
+    except httpx.HTTPError as exc:
+
+        raise URLFetchError() from exc
+
+    return extract_text_from_html(
+        response.text
+    )

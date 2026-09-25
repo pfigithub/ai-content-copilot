@@ -7,6 +7,12 @@ from app.config import settings
 from app.providers.ai_provider import AIProvider
 from app.task_registry import get_task_definition
 
+from app.exceptions import (
+    AIProviderResponseError,
+    AIProviderTimeoutError,
+    AIProviderUnavailableError,
+)
+
 
 class OllamaProvider(AIProvider):
 
@@ -159,17 +165,19 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
 
         except httpx.ConnectError as exc:
 
-            raise ValueError(
-                "AI provider is unavailable."
-            ) from exc
+            raise AIProviderUnavailableError() from exc
 
         except httpx.TimeoutException as exc:
 
-            raise ValueError(
-                "AI provider timed out."
-            ) from exc
+            raise AIProviderTimeoutError() from exc
 
-        response.raise_for_status()
+        try:
+
+            response.raise_for_status()
+
+        except httpx.HTTPError as exc:
+
+            raise AIProviderResponseError() from exc        
 
         data = response.json()
 
@@ -181,9 +189,7 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
 
         except (KeyError, TypeError) as exc:
 
-            raise ValueError(
-                "AI provider returned an unexpected response."
-            ) from exc
+            raise AIProviderResponseError() from exc
 
         try:
 
@@ -193,9 +199,7 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
 
         except json.JSONDecodeError as exc:
 
-            raise ValueError(
-                "AI returned invalid JSON."
-            ) from exc
+            raise AIProviderResponseError() from exc
 
         try:
 
@@ -207,8 +211,6 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
 
         except ValidationError as exc:
 
-            raise ValueError(
-                "AI returned an invalid structure."
-            ) from exc
+            raise AIProviderResponseError() from exc
 
         return validated_result.model_dump()
