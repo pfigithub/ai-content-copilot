@@ -150,7 +150,7 @@ def test_ollama_provider_supports_tasks_and_source_language(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda: FakeAsyncClient(
+        lambda *args, **kwargs: FakeAsyncClient(
             response_content,
             captured_requests,
         ),
@@ -199,7 +199,7 @@ def test_ollama_provider_separates_system_rules_from_source(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda: FakeAsyncClient(
+        lambda *args, **kwargs: FakeAsyncClient(
             response_content,
             captured_requests,
         ),
@@ -265,7 +265,7 @@ def test_ollama_provider_separates_instruction_from_source(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda: FakeAsyncClient(
+        lambda *args, **kwargs: FakeAsyncClient(
             response_content,
             captured_requests,
         ),
@@ -355,7 +355,7 @@ def test_ollama_provider_enforces_output_language_contract(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda: FakeAsyncClient(
+        lambda *args, **kwargs: FakeAsyncClient(
             response_content,
             captured_requests,
         ),
@@ -429,7 +429,7 @@ def test_ollama_provider_receives_resolved_output_language(
     monkeypatch.setattr(
         httpx,
         "AsyncClient",
-        lambda: FakeAsyncClient(
+        lambda *args, **kwargs: FakeAsyncClient(
             response_content,
             captured_requests,
         ),

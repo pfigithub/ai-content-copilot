@@ -135,7 +135,13 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
 
         try:
 
-            async with httpx.AsyncClient() as client:
+            transport = httpx.AsyncHTTPTransport(
+                retries=2,
+            )
+            
+            async with httpx.AsyncClient(
+                transport=transport,
+            ) as client:
 
                 response = await client.post(
                     (
