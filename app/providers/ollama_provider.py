@@ -184,9 +184,12 @@ NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT:
         except httpx.HTTPError as exc:
 
             raise AIProviderResponseError() from exc        
-
-        data = response.json()
-
+        
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise AIProviderResponseError() from exc
+            
         try:
 
             raw_response_content = (

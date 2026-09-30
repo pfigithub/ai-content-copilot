@@ -7,7 +7,11 @@ import pytest
 from app.providers.ollama_provider import (
     OllamaProvider,
 )
-
+from app.exceptions import (
+    AIProviderUnavailableError,
+    AIProviderResponseError,
+    AIProviderTimeoutError,
+)
 
 class FakeResponse:
 
@@ -70,6 +74,133 @@ class FakeAsyncClient:
                 }
             }
         )
+
+
+class ConnectErrorAsyncClient:
+
+    async def __aenter__(self):
+        raise httpx.ConnectError(
+            "connection failed"
+        )
+
+    async def __aexit__(
+        self,
+        exc_type,
+        exc,
+        tb,
+    ):
+        pass
+
+
+class TimeoutAsyncClient:
+
+    async def __aenter__(self):
+        raise httpx.ConnectTimeout(
+            "connection timed out"
+        )
+
+    async def __aexit__(
+        self,
+        exc_type,
+        exc,
+        tb,
+    ):
+        pass
+
+
+class HTTPErrorResponse:
+
+    def raise_for_status(self):
+        raise httpx.HTTPError(
+            "provider returned an HTTP error"
+        )
+
+    def json(self):
+        return {}
+
+class HTTPErrorAsyncClient:
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type,
+        exc,
+        tb,
+    ):
+        pass
+
+    async def post(
+        self,
+        *args,
+        **kwargs,
+    ):
+        return HTTPErrorResponse()
+
+class InvalidJSONResponse:
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        raise json.JSONDecodeError(
+            "invalid json",
+            "",
+            0,
+        )
+
+class InvalidJSONAsyncClient:
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type,
+        exc,
+        tb,
+    ):
+        pass
+
+    async def post(
+        self,
+        *args,
+        **kwargs,
+    ):
+        return InvalidJSONResponse()
+
+class InvalidStructuredOutputAsyncClient:
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type,
+        exc,
+        tb,
+    ):
+        pass
+
+    async def post(
+        self,
+        *args,
+        **kwargs,
+    ):
+        return FakeResponse(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "title": "Only title",
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        )
+
 
 
 @pytest.mark.parametrize(
@@ -459,4 +590,182 @@ def test_ollama_provider_receives_resolved_output_language(
     assert (
         "NON-NEGOTIABLE OUTPUT LANGUAGE CONTRACT"
         in system_message
+    )
+    
+
+def test_ollama_provider_maps_connect_error_to_unavailable(
+    monkeypatch,
+):
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: ConnectErrorAsyncClient(),
+    )
+
+    provider = OllamaProvider()
+
+    with pytest.raises(
+        AIProviderUnavailableError
+    ):
+
+        asyncio.run(
+            provider.analyze_content(
+                content="Test content.",
+                task="summarize",
+                source_language="en",
+            )
+        )
+
+
+def test_ollama_provider_maps_connect_timeout_to_timeout_error(
+    monkeypatch,
+):
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: TimeoutAsyncClient(),
+    )
+
+    provider = OllamaProvider()
+
+    with pytest.raises(
+        AIProviderTimeoutError
+    ):
+
+        asyncio.run(
+            provider.analyze_content(
+                content="Test content.",
+                task="summarize",
+                source_language="en",
+            )
+        )
+        
+def test_ollama_provider_maps_http_error_to_response_error(
+    monkeypatch,
+):
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: HTTPErrorAsyncClient(),
+    )
+
+    provider = OllamaProvider()
+
+    with pytest.raises(
+        AIProviderResponseError
+    ):
+
+        asyncio.run(
+            provider.analyze_content(
+                content="Test content.",
+                task="summarize",
+                source_language="en",
+            )
+        )
+        
+def test_ollama_provider_maps_invalid_json_to_response_error(
+    monkeypatch,
+):
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: InvalidJSONAsyncClient(),
+    )
+
+    provider = OllamaProvider()
+
+    with pytest.raises(
+        AIProviderResponseError
+    ):
+
+        asyncio.run(
+            provider.analyze_content(
+                content="Test content.",
+                task="summarize",
+                source_language="en",
+            )
+        )
+        
+def test_ollama_provider_maps_invalid_structured_output_to_response_error(
+    monkeypatch,
+):
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: (
+            InvalidStructuredOutputAsyncClient()
+        ),
+    )
+
+    provider = OllamaProvider()
+
+    with pytest.raises(
+        AIProviderResponseError
+    ):
+
+        asyncio.run(
+            provider.analyze_content(
+                content="Test content.",
+                task="summarize",
+                source_language="en",
+            )
+        )
+        
+def test_ollama_provider_configures_connection_retries(
+    monkeypatch,
+):
+
+    captured_transport = {}
+
+    response_content = {
+        "title": "Test title",
+        "summary": "Test summary",
+        "importance": 70,
+        "category": "technology",
+    }
+
+    def fake_transport(
+        *args,
+        **kwargs,
+    ):
+
+        captured_transport.update(
+            kwargs
+        )
+
+        return object()
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncHTTPTransport",
+        fake_transport,
+    )
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: FakeAsyncClient(
+            response_content,
+            [],
+        ),
+    )
+
+    provider = OllamaProvider()
+
+    asyncio.run(
+        provider.analyze_content(
+            content="Test content.",
+            task="summarize",
+            source_language="en",
+        )
+    )
+
+    assert (
+        captured_transport["retries"]
+        == 2
     )
