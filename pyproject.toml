@@ -22,6 +22,10 @@ dependencies = [
     "python-dotenv",
     "lingua-language-detector",
     "langcodes[data]",
+    "langchain",
+    "langchain-ollama",
+    "langgraph",
+    "langchain-text-splitters",
 ]
 
 
