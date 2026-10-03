@@ -26,6 +26,8 @@ dependencies = [
     "langchain-ollama",
     "langgraph",
     "langchain-text-splitters",
+    "langchain-qdrant",
+    "qdrant-client",
 ]
 
 
