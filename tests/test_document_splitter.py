@@ -86,3 +86,22 @@ def test_split_document_validates_chunk_overlap():
             chunk_size=100,
             chunk_overlap=100,
         )
+        
+def test_split_document_adds_chunk_metadata():
+    text = "این یک متن آزمایشی نسبتاً طولانی است. " * 100
+
+    chunks = split_document(
+        text=text,
+        source="example.txt",
+        source_type="test",
+        chunk_size=200,
+        chunk_overlap=20,
+    )
+
+    assert len(chunks) > 1
+
+    for index, chunk in enumerate(chunks, start=1):
+        assert chunk.metadata["source"] == "example.txt"
+        assert chunk.metadata["source_type"] == "test"
+        assert chunk.metadata["chunk_index"] == index
+        assert chunk.metadata["chunk_count"] == len(chunks)

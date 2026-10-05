@@ -1,9 +1,5 @@
-from langchain_core.documents import (
-    Document,
-)
-from langchain_text_splitters import (
-    RecursiveCharacterTextSplitter,
-)
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 DEFAULT_CHUNK_SIZE = 800
@@ -17,21 +13,14 @@ def split_document(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[Document]:
-
     if not text or not text.strip():
-        raise ValueError(
-            "Document text cannot be empty."
-        )
+        raise ValueError("Document text cannot be empty.")
 
     if chunk_size <= 0:
-        raise ValueError(
-            "chunk_size must be greater than zero."
-        )
+        raise ValueError("chunk_size must be greater than zero.")
 
     if chunk_overlap < 0:
-        raise ValueError(
-            "chunk_overlap cannot be negative."
-        )
+        raise ValueError("chunk_overlap cannot be negative.")
 
     if chunk_overlap >= chunk_size:
         raise ValueError(
@@ -46,13 +35,17 @@ def split_document(
         },
     )
 
-    splitter = (
-        RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-        )
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
 
-    return splitter.split_documents(
-        [document]
-    )
+    chunks = splitter.split_documents([document])
+
+    chunk_count = len(chunks)
+
+    for index, chunk in enumerate(chunks, start=1):
+        chunk.metadata["chunk_index"] = index
+        chunk.metadata["chunk_count"] = chunk_count
+
+    return chunks
