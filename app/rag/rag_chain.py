@@ -89,6 +89,19 @@ class RAGChain:
             score_threshold=score_threshold,
         )
 
+        return await self.answer_from_results(
+            query=query,
+            results=results,
+        )
+
+    async def answer_from_results(
+        self,
+        query: str,
+        results: list[tuple[Document, float]],
+    ) -> RAGResponse:
+        if not query or not query.strip():
+            raise ValueError("Query cannot be empty.")
+
         if not results:
             return RAGResponse(
                 answer=(
