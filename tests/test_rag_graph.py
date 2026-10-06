@@ -187,3 +187,92 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
 
     assert retriever.calls == 1
     assert model.calls == 1
+    
+def test_rag_graph_persists_state_by_thread():
+    retriever = FakeRetriever(
+        results=[]
+    )
+
+    model = FakeModel()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+    )
+
+    thread_id = "thread-persistence-test"
+
+    response = asyncio.run(
+        graph.answer(
+            query="سؤال آزمایشی برای persistence",
+            thread_id=thread_id,
+        )
+    )
+
+    assert response.sources == []
+
+    snapshot = graph.get_state(thread_id)
+
+    assert snapshot.values["query"] == (
+        "سؤال آزمایشی برای persistence"
+    )
+
+    assert snapshot.values["results"] == []
+
+    assert snapshot.values["response"].answer == (
+        "اطلاعات مرتبط و کافی در منابع "
+        "بازیابی‌شده پیدا نشد."
+    )
+
+
+def test_rag_graph_keeps_threads_separate():
+    retriever = FakeRetriever(
+        results=[]
+    )
+
+    model = FakeModel()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+    )
+
+    asyncio.run(
+        graph.answer(
+            query="سؤال مربوط به thread اول",
+            thread_id="thread-1",
+        )
+    )
+
+    asyncio.run(
+        graph.answer(
+            query="سؤال مربوط به thread دوم",
+            thread_id="thread-2",
+        )
+    )
+
+    state_1 = graph.get_state(
+        "thread-1"
+    )
+
+    state_2 = graph.get_state(
+        "thread-2"
+    )
+
+    assert state_1.values["query"] == (
+        "سؤال مربوط به thread اول"
+    )
+
+    assert state_2.values["query"] == (
+        "سؤال مربوط به thread دوم"
+    )

@@ -1,6 +1,7 @@
 from typing import AsyncIterator, Literal, TypedDict
 
 from langchain_core.documents import Document
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from app.rag.rag_chain import RAGChain, RAGResponse
@@ -20,6 +21,7 @@ class RAGGraph:
         self,
         retriever: ContentRetriever | None = None,
         rag_chain: RAGChain | None = None,
+        checkpointer=None,
     ):
         self.retriever = (
             retriever
@@ -33,6 +35,12 @@ class RAGGraph:
             else RAGChain(
                 retriever=self.retriever
             )
+        )
+
+        self.checkpointer = (
+            checkpointer
+            if checkpointer is not None
+            else InMemorySaver()
         )
 
         graph = StateGraph(RAGGraphState)
@@ -76,7 +84,9 @@ class RAGGraph:
             END,
         )
 
-        self.graph = graph.compile()
+        self.graph = graph.compile(
+            checkpointer=self.checkpointer
+        )
 
     async def _retrieve(
         self,
@@ -129,17 +139,53 @@ class RAGGraph:
                 sources=[],
             )
         }
-        
+
+    async def answer(
+        self,
+        query: str,
+        k: int = 4,
+        score_threshold: float | None = None,
+        thread_id: str = "default",
+    ) -> RAGResponse:
+        if not query or not query.strip():
+            raise ValueError(
+                "Query cannot be empty."
+            )
+
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+
+        result = await self.graph.ainvoke(
+            {
+                "query": query,
+                "k": k,
+                "score_threshold": score_threshold,
+            },
+            config,
+        )
+
+        return result["response"]
+
     async def stream_steps(
         self,
         query: str,
         k: int = 4,
         score_threshold: float | None = None,
+        thread_id: str = "default",
     ) -> AsyncIterator[dict]:
         if not query or not query.strip():
             raise ValueError(
-            "   Query cannot be empty."
+                "Query cannot be empty."
             )
+
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
 
         async for update in self.graph.astream(
             {
@@ -147,28 +193,19 @@ class RAGGraph:
                 "k": k,
                 "score_threshold": score_threshold,
             },
+            config,
             stream_mode="updates",
         ):
             yield update
 
-    
-    async def answer(
+    def get_state(
         self,
-        query: str,
-        k: int = 4,
-        score_threshold: float | None = None,
-    ) -> RAGResponse:
-        if not query or not query.strip():
-            raise ValueError(
-                "Query cannot be empty."
-            )
-
-        result = await self.graph.ainvoke(
-            {
-                "query": query,
-                "k": k,
-                "score_threshold": score_threshold,
+        thread_id: str,
+    ):
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
             }
-        )
+        }
 
-        return result["response"]
+        return self.graph.get_state(config)
