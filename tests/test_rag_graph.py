@@ -129,3 +129,61 @@ def test_rag_graph_abstains_without_results():
         "اطلاعات مرتبط و کافی در منابع "
         "بازیابی‌شده پیدا نشد."
     )
+    
+def test_rag_graph_streams_retrieve_and_generate_updates():
+    document = Document(
+        page_content=(
+            "آبیاری قطره‌ای می‌تواند "
+            "مصرف آب را کاهش دهد."
+        ),
+        metadata={
+            "source": "agriculture.txt",
+            "source_type": "evaluation",
+            "chunk_index": 2,
+            "chunk_count": 5,
+        },
+    )
+
+    retriever = FakeRetriever(
+        results=[
+            (document, 0.72),
+        ]
+    )
+
+    model = FakeModel()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+    )
+
+    updates = []
+
+    async def collect_updates():
+        async for update in graph.stream_steps(
+            query="چطور مصرف آب کشاورزی را کاهش دهیم؟"
+        ):
+            updates.append(update)
+
+    asyncio.run(collect_updates())
+
+    assert len(updates) == 2
+
+    assert list(updates[0].keys()) == [
+        "retrieve"
+    ]
+
+    assert list(updates[1].keys()) == [
+        "generate"
+    ]
+
+    assert "results" in updates[0]["retrieve"]
+    assert "response" in updates[1]["generate"]
+
+    assert retriever.calls == 1
+    assert model.calls == 1

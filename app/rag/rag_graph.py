@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import AsyncIterator, Literal, TypedDict
 
 from langchain_core.documents import Document
 from langgraph.graph import END, START, StateGraph
@@ -129,7 +129,29 @@ class RAGGraph:
                 sources=[],
             )
         }
+        
+    async def stream_steps(
+        self,
+        query: str,
+        k: int = 4,
+        score_threshold: float | None = None,
+    ) -> AsyncIterator[dict]:
+        if not query or not query.strip():
+            raise ValueError(
+            "   Query cannot be empty."
+            )
 
+        async for update in self.graph.astream(
+            {
+                "query": query,
+                "k": k,
+                "score_threshold": score_threshold,
+            },
+            stream_mode="updates",
+        ):
+            yield update
+
+    
     async def answer(
         self,
         query: str,
