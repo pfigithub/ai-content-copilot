@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
@@ -59,6 +60,8 @@ class RAGChain:
                 (
                     "human",
                     (
+                        "Conversation history:\n"
+                        "{history}\n\n"
                         "Question:\n"
                         "{question}\n\n"
                         "Context:\n"
@@ -98,6 +101,7 @@ class RAGChain:
         self,
         query: str,
         results: list[tuple[Document, float]],
+        history: list[BaseMessage] | None = None,
     ) -> RAGResponse:
         if not query or not query.strip():
             raise ValueError("Query cannot be empty.")
@@ -142,9 +146,14 @@ class RAGChain:
             )
 
         context = "\n\n".join(context_parts)
+        
+        history_text = self._format_history(
+            history or []
+        )
 
         result = await self.chain.ainvoke(
             {
+                "history": history_text,
                 "question": query,
                 "context": context,
             }
@@ -155,6 +164,30 @@ class RAGChain:
             sources=sources,
         )
 
+    @staticmethod
+    def _format_history(
+        messages: list[BaseMessage],
+    ) -> str:
+        if not messages :
+            return "No previous conversation."
+        
+        parts = []
+        
+        for message in messages:
+            if message.type == "human":
+                role = "User"
+            elif message.type == "ai":
+                role = "Assistant"
+            else:
+                role = message.type
+                
+        parts.append(
+            f"{role}: {message.content}"
+        )
+    
+        return "\n".join(parts)
+    
+    
     @staticmethod
     def _format_document(
         index: int,

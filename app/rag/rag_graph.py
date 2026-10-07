@@ -1,19 +1,24 @@
-from typing import AsyncIterator, Literal, TypedDict
+from typing import Annotated, AsyncIterator, Literal, TypedDict
 
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 
+from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
 
 
 class RAGGraphState(TypedDict, total=False):
+    messages: Annotated[list[AnyMessage], add_messages]
     query: str
+    retrieval_query: str
     k: int
     score_threshold: float | None
     results: list[tuple[Document, float]]
-    response: RAGResponse
+    response: dict
 
 
 class RAGGraph:
@@ -21,6 +26,7 @@ class RAGGraph:
         self,
         retriever: ContentRetriever | None = None,
         rag_chain: RAGChain | None = None,
+        contextualizer: QueryContextualizer | None = None,
         checkpointer=None,
     ):
         self.retriever = (
@@ -37,6 +43,12 @@ class RAGGraph:
             )
         )
 
+        self.contextualizer = (
+            contextualizer
+            if contextualizer is not None
+            else QueryContextualizer()
+        )
+
         self.checkpointer = (
             checkpointer
             if checkpointer is not None
@@ -44,6 +56,11 @@ class RAGGraph:
         )
 
         graph = StateGraph(RAGGraphState)
+
+        graph.add_node(
+            "contextualize",
+            self._contextualize,
+        )
 
         graph.add_node(
             "retrieve",
@@ -62,6 +79,11 @@ class RAGGraph:
 
         graph.add_edge(
             START,
+            "contextualize",
+        )
+
+        graph.add_edge(
+            "contextualize",
             "retrieve",
         )
 
@@ -88,12 +110,44 @@ class RAGGraph:
             checkpointer=self.checkpointer
         )
 
+    async def _contextualize(
+        self,
+        state: RAGGraphState,
+    ) -> dict:
+        messages = state.get(
+            "messages",
+            [],
+        )
+
+        history = messages[:-1]
+
+        if not history:
+            return {
+                "retrieval_query": state["query"],
+            }
+
+        retrieval_query = (
+            await self.contextualizer.contextualize(
+                question=state["query"],
+                history=history,
+            )
+        )
+
+        return {
+            "retrieval_query": retrieval_query,
+        }
+
     async def _retrieve(
         self,
         state: RAGGraphState,
     ) -> dict:
+        retrieval_query = state.get(
+            "retrieval_query",
+            state["query"],
+        )
+
         results = await self.retriever.retrieve(
-            query=state["query"],
+            query=retrieval_query,
             k=state.get("k", 4),
             score_threshold=state.get(
                 "score_threshold"
@@ -117,27 +171,52 @@ class RAGGraph:
         self,
         state: RAGGraphState,
     ) -> dict:
-        response = await self.rag_chain.answer_from_results(
-            query=state["query"],
-            results=state.get("results", []),
+        messages = state.get(
+            "messages",
+            [],
+        )
+
+        history = messages[:-1]
+
+        response = (
+            await self.rag_chain.answer_from_results(
+                query=state["query"],
+                results=state.get(
+                    "results",
+                    [],
+                ),
+                history=history,
+            )
         )
 
         return {
-            "response": response,
+            "response": response.model_dump(),
+            "messages": [
+                AIMessage(
+                    content=response.answer
+                )
+            ],
         }
 
     @staticmethod
     def _abstain(
         state: RAGGraphState,
     ) -> dict:
+        response = RAGResponse(
+            answer=(
+                "اطلاعات مرتبط و کافی در منابع "
+                "بازیابی‌شده پیدا نشد."
+            ),
+            sources=[],
+        )
+
         return {
-            "response": RAGResponse(
-                answer=(
-                    "اطلاعات مرتبط و کافی در منابع "
-                    "بازیابی‌شده پیدا نشد."
-                ),
-                sources=[],
-            )
+            "response": response.model_dump(),
+            "messages": [
+                AIMessage(
+                    content=response.answer
+                )
+            ],
         }
 
     async def answer(
@@ -163,11 +242,19 @@ class RAGGraph:
                 "query": query,
                 "k": k,
                 "score_threshold": score_threshold,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": query,
+                    }
+                ],
             },
             config,
         )
 
-        return result["response"]
+        return RAGResponse.model_validate(
+            result["response"]
+        )
 
     async def stream_steps(
         self,
@@ -192,6 +279,12 @@ class RAGGraph:
                 "query": query,
                 "k": k,
                 "score_threshold": score_threshold,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": query,
+                    }
+                ],
             },
             config,
             stream_mode="updates",
