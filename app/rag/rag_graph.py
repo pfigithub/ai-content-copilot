@@ -1,18 +1,30 @@
-from typing import Annotated, AsyncIterator, Literal, TypedDict
+from typing import (
+    Annotated,
+    AsyncIterator,
+    Literal,
+    TypedDict,
+)
 
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, AnyMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from app.memory.policy import get_messages_to_remove
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
 
 
 class RAGGraphState(TypedDict, total=False):
-    messages: Annotated[list[AnyMessage], add_messages]
+    messages: Annotated[
+        list[AnyMessage],
+        add_messages,
+    ]
     query: str
     retrieval_query: str
     k: int
@@ -77,6 +89,11 @@ class RAGGraph:
             self._abstain,
         )
 
+        graph.add_node(
+            "trim_memory",
+            self._trim_memory,
+        )
+
         graph.add_edge(
             START,
             "contextualize",
@@ -98,11 +115,16 @@ class RAGGraph:
 
         graph.add_edge(
             "generate",
-            END,
+            "trim_memory",
         )
 
         graph.add_edge(
             "abstain",
+            "trim_memory",
+        )
+
+        graph.add_edge(
+            "trim_memory",
             END,
         )
 
@@ -217,6 +239,23 @@ class RAGGraph:
                     content=response.answer
                 )
             ],
+        }
+
+    @staticmethod
+    def _trim_memory(
+        state: RAGGraphState,
+    ) -> dict:
+        messages = state.get(
+            "messages",
+            [],
+        )
+
+        messages_to_remove = (
+            get_messages_to_remove(messages)
+        )
+
+        return {
+            "messages": messages_to_remove,
         }
 
     async def answer(

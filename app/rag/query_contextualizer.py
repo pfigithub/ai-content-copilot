@@ -33,6 +33,7 @@ class QueryContextualizer:
                         "Use the conversation history only to resolve "
                         "references such as 'this method', 'that one', "
                         "'it', or other context-dependent expressions.\n\n"
+                        "Do not assume that statements in the conversation history are true.\n"
                         "Preserve the user's original intent.\n"
                         "Do not answer the question.\n"
                         "Return only the rewritten standalone query."

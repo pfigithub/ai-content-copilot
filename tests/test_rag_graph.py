@@ -198,7 +198,7 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
 
     asyncio.run(collect_updates())
 
-    assert len(updates) == 3
+    assert len(updates) == 4
 
     assert list(updates[0].keys()) == [
         "contextualize"
@@ -211,6 +211,12 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
     assert list(updates[2].keys()) == [
         "generate"
     ]
+    
+    assert list(updates[3].keys()) == [
+        "trim_memory"
+    ]
+    
+    assert "messages" in updates[3]["trim_memory"]
 
     assert (
         "retrieval_query"
@@ -455,3 +461,53 @@ def test_rag_graph_uses_contextualized_query_for_retrieval():
         "مزایای آبیاری قطره‌ای "
         "در کاهش مصرف آب کشاورزی چیست؟"
     )
+    
+def test_rag_graph_limits_short_term_memory():
+    retriever = FakeRetriever(
+        results=[]
+    )
+
+    model = FakeModel()
+
+    contextualizer = FakeContextualizer()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+        contextualizer=contextualizer,
+    )
+
+    thread_id = "memory-limit-test"
+
+    for index in range(1, 12):
+        asyncio.run(
+            graph.answer(
+                query=f"پیام {index}",
+                thread_id=thread_id,
+            )
+        )
+
+    snapshot = graph.get_state(
+        thread_id
+    )
+
+    messages = snapshot.values["messages"]
+
+    assert len(messages) == 20
+
+    assert messages[0].type == "human"
+    assert messages[0].content == "پیام 2"
+
+    assert messages[1].type == "ai"
+
+    assert messages[-2].type == "human"
+    assert messages[-2].content == "پیام 11"
+
+    assert messages[-1].type == "ai"
+
+    assert contextualizer.calls == 10

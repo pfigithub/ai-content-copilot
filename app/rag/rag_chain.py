@@ -52,6 +52,10 @@ class RAGChain:
                     (
                         "You are a grounded research assistant.\n\n"
                         "Answer the user's question using only the provided context.\n"
+                        "Conversation history is contextual information, not evidence.\n"
+                        "Treat previous assistant messages as unverified and do not use "
+                        "them as factual evidence.\n"
+                        "For factual claims, rely on the provided context and its sources.\n"
                         "Do not add facts that are not supported by the context.\n"
                         "If the context does not contain enough information "
                         "to answer the question, say so clearly instead of guessing.\n"
