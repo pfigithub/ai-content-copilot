@@ -2,8 +2,9 @@ import asyncio
 
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
+from langgraph.store.memory import InMemoryStore
 
-from app.rag.query_contextualizer import ContextualizedQuery
+from app.memory.long_term_memory import UserMemoryStore
 from app.rag.rag_chain import RAGAnswer, RAGChain
 from app.rag.rag_graph import RAGGraph
 
@@ -178,6 +179,8 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
 
     model = FakeModel()
 
+    contextualizer = FakeContextualizer()
+
     rag_chain = RAGChain(
         retriever=retriever,
         model=model,
@@ -186,6 +189,7 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
     graph = RAGGraph(
         retriever=retriever,
         rag_chain=rag_chain,
+        contextualizer=contextualizer,
     )
 
     updates = []
@@ -198,44 +202,36 @@ def test_rag_graph_streams_retrieve_and_generate_updates():
 
     asyncio.run(collect_updates())
 
-    assert len(updates) == 4
-
-    assert list(updates[0].keys()) == [
-        "contextualize"
+    update_nodes = [
+        next(iter(update.keys()))
+        for update in updates
+        if update
     ]
 
-    assert list(updates[1].keys()) == [
-        "retrieve"
+    assert update_nodes[:4] == [
+        "load_memory",
+        "contextualize",
+        "retrieve",
+        "generate",
     ]
-
-    assert list(updates[2].keys()) == [
-        "generate"
-    ]
-    
-    assert list(updates[3].keys()) == [
-        "trim_memory"
-    ]
-    
-    assert "messages" in updates[3]["trim_memory"]
 
     assert (
         "retrieval_query"
-        in updates[0]["contextualize"]
+        in updates[1]["contextualize"]
     )
 
     assert (
         "results"
-        in updates[1]["retrieve"]
+        in updates[2]["retrieve"]
     )
 
     assert (
         "response"
-        in updates[2]["generate"]
+        in updates[3]["generate"]
     )
 
     assert retriever.calls == 1
     assert model.calls == 1
-
 
 def test_rag_graph_persists_state_by_thread():
     retriever = FakeRetriever(
@@ -511,3 +507,82 @@ def test_rag_graph_limits_short_term_memory():
     assert messages[-1].type == "ai"
 
     assert contextualizer.calls == 10
+    
+def test_rag_graph_loads_user_preferences_across_threads():
+    memory_store = UserMemoryStore(
+        store=InMemoryStore()
+    )
+
+    memory_store.save_explicit(
+        user_id="user-001",
+        memory_id="language",
+        content="کاربر پاسخ‌های فارسی می‌خواهد.",
+    )
+
+    document = Document(
+        page_content=(
+            "آبیاری قطره‌ای می‌تواند "
+            "مصرف آب را کاهش دهد."
+        ),
+        metadata={
+            "source": "agriculture.txt",
+            "source_type": "evaluation",
+            "chunk_index": 1,
+            "chunk_count": 1,
+        },
+    )
+
+    retriever = FakeRetriever(
+        results=[
+            (document, 0.72),
+        ]
+    )
+
+    model = FakeModel()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+        memory_store=memory_store,
+    )
+
+    first_response = asyncio.run(
+        graph.answer(
+            query="چطور مصرف آب را کاهش دهیم؟",
+            thread_id="thread-1",
+            user_id="user-001",
+        )
+    )
+
+    second_response = asyncio.run(
+        graph.answer(
+            query="چه روشی مناسب است؟",
+            thread_id="thread-2",
+            user_id="user-001",
+        )
+    )
+
+    assert first_response.answer == (
+        "پاسخ آزمایشی بر اساس "
+        "منابع بازیابی‌شده"
+    )
+
+    assert second_response.answer == (
+        "پاسخ آزمایشی بر اساس "
+        "منابع بازیابی‌شده"
+    )
+
+    snapshot = graph.get_state(
+        "thread-2"
+    )
+
+    assert snapshot.values[
+        "user_preferences"
+    ][0]["content"] == (
+        "کاربر پاسخ‌های فارسی می‌خواهد."
+    )

@@ -53,9 +53,12 @@ class RAGChain:
                         "You are a grounded research assistant.\n\n"
                         "Answer the user's question using only the provided context.\n"
                         "Conversation history is contextual information, not evidence.\n"
+                        "User preferences are for personalization only, not factual evidence.\n"
                         "Treat previous assistant messages as unverified and do not use "
                         "them as factual evidence.\n"
                         "For factual claims, rely on the provided context and its sources.\n"
+                        "Do not treat user preferences or conversation history as factual "
+                        "evidence.\n"
                         "Do not add facts that are not supported by the context.\n"
                         "If the context does not contain enough information "
                         "to answer the question, say so clearly instead of guessing.\n"
@@ -64,6 +67,8 @@ class RAGChain:
                 (
                     "human",
                     (
+                        "User preferences:\n"
+                        "{user_preferences}\n\n"
                         "Conversation history:\n"
                         "{history}\n\n"
                         "Question:\n"
@@ -106,6 +111,7 @@ class RAGChain:
         query: str,
         results: list[tuple[Document, float]],
         history: list[BaseMessage] | None = None,
+        user_preferences: list[dict] | None = None,
     ) -> RAGResponse:
         if not query or not query.strip():
             raise ValueError("Query cannot be empty.")
@@ -154,9 +160,14 @@ class RAGChain:
         history_text = self._format_history(
             history or []
         )
+        
+        user_preferences_text = self._format_preferences(
+            user_preferences or []
+        )
 
         result = await self.chain.ainvoke(
             {
+                "user_preferences": user_preferences_text,
                 "history": history_text,
                 "question": query,
                 "context": context,
@@ -190,6 +201,31 @@ class RAGChain:
         )
     
         return "\n".join(parts)
+    
+    @staticmethod
+    def _format_preferences(
+        preferences: list[dict],
+    ) -> str:
+        if not preferences:
+            return "No user preferences."
+
+        parts = []
+
+        for preference in preferences:
+            content = str(
+                preference.get("content", "")
+            ).strip()
+
+            if content:
+                parts.append(
+                    f"- {content}"
+                )
+
+        return (
+            "\n".join(parts)
+            if parts
+            else "No user preferences."
+        )
     
     
     @staticmethod
