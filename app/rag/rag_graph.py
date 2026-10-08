@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import (
     Annotated,
     AsyncIterator,
@@ -13,12 +14,18 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
+from langgraph.store.memory import InMemoryStore
 
-from app.memory.long_term_memory import UserMemoryStore
 from app.memory.policy import get_messages_to_remove
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
+
+
+@dataclass
+class RAGContext:
+    user_id: str | None = None
 
 
 class RAGGraphState(TypedDict, total=False):
@@ -32,7 +39,6 @@ class RAGGraphState(TypedDict, total=False):
     score_threshold: float | None
     results: list[tuple[Document, float]]
     response: dict
-    user_id: str | None
     user_preferences: list[dict]
 
 
@@ -43,7 +49,7 @@ class RAGGraph:
         rag_chain: RAGChain | None = None,
         contextualizer: QueryContextualizer | None = None,
         checkpointer=None,
-        memory_store: UserMemoryStore | None = None,
+        store: InMemoryStore | None = None,
     ):
         self.retriever = (
             retriever
@@ -71,13 +77,16 @@ class RAGGraph:
             else InMemorySaver()
         )
 
-        self.memory_store = (
-            memory_store
-            if memory_store is not None
-            else UserMemoryStore()
+        self.store = (
+            store
+            if store is not None
+            else InMemoryStore()
         )
 
-        graph = StateGraph(RAGGraphState)
+        graph = StateGraph(
+            RAGGraphState,
+            context_schema=RAGContext,
+        )
 
         graph.add_node(
             "load_memory",
@@ -149,27 +158,37 @@ class RAGGraph:
         )
 
         self.graph = graph.compile(
-            checkpointer=self.checkpointer
+            checkpointer=self.checkpointer,
+            store=self.store,
         )
 
     async def _load_memory(
         self,
         state: RAGGraphState,
+        runtime: Runtime[RAGContext],
     ) -> dict:
-        user_id = state.get(
-            "user_id"
-        )
+        user_id = runtime.context.user_id
 
         if not user_id:
             return {
                 "user_preferences": []
             }
 
-        preferences = (
-            self.memory_store.get_preferences(
-                user_id=user_id,
-            )
+        items = await runtime.store.asearch(
+            (
+                "memories",
+                user_id,
+            ),
+            filter={
+                "memory_type": "preference",
+            },
+            limit=10,
         )
+
+        preferences = [
+            item.value
+            for item in items
+        ]
 
         return {
             "user_preferences": preferences,
@@ -329,7 +348,6 @@ class RAGGraph:
                 "query": query,
                 "k": k,
                 "score_threshold": score_threshold,
-                "user_id": user_id,
                 "messages": [
                     {
                         "role": "user",
@@ -338,6 +356,9 @@ class RAGGraph:
                 ],
             },
             config,
+            context=RAGContext(
+                user_id=user_id
+            ),
         )
 
         return RAGResponse.model_validate(
@@ -368,7 +389,6 @@ class RAGGraph:
                 "query": query,
                 "k": k,
                 "score_threshold": score_threshold,
-                "user_id": user_id,
                 "messages": [
                     {
                         "role": "user",
@@ -377,6 +397,9 @@ class RAGGraph:
                 ],
             },
             config,
+            context=RAGContext(
+                user_id=user_id
+            ),
             stream_mode="updates",
         ):
             yield update

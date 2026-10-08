@@ -508,9 +508,14 @@ def test_rag_graph_limits_short_term_memory():
 
     assert contextualizer.calls == 10
     
+
 def test_rag_graph_loads_user_preferences_across_threads():
+    from langgraph.store.memory import InMemoryStore
+
+    store = InMemoryStore()
+
     memory_store = UserMemoryStore(
-        store=InMemoryStore()
+        store=store
     )
 
     memory_store.save_explicit(
@@ -548,7 +553,7 @@ def test_rag_graph_loads_user_preferences_across_threads():
     graph = RAGGraph(
         retriever=retriever,
         rag_chain=rag_chain,
-        memory_store=memory_store,
+        store=store,
     )
 
     first_response = asyncio.run(
@@ -586,3 +591,59 @@ def test_rag_graph_loads_user_preferences_across_threads():
     ][0]["content"] == (
         "کاربر پاسخ‌های فارسی می‌خواهد."
     )
+    
+def test_normal_conversation_does_not_write_long_term_memory():
+    from langgraph.store.memory import InMemoryStore
+
+    store = InMemoryStore()
+
+    memory_store = UserMemoryStore(
+        store=store
+    )
+
+    document = Document(
+        page_content=(
+            "آبیاری قطره‌ای می‌تواند "
+            "مصرف آب را کاهش دهد."
+        ),
+        metadata={
+            "source": "agriculture.txt",
+            "source_type": "evaluation",
+            "chunk_index": 1,
+            "chunk_count": 1,
+        },
+    )
+
+    retriever = FakeRetriever(
+        results=[
+            (document, 0.72),
+        ]
+    )
+
+    model = FakeModel()
+
+    rag_chain = RAGChain(
+        retriever=retriever,
+        model=model,
+    )
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=rag_chain,
+        store=store,
+    )
+
+    asyncio.run(
+        graph.answer(
+            query=(
+                "من پاسخ کوتاه را ترجیح می‌دهم."
+            ),
+            thread_id="thread-1",
+            user_id="user-001",
+        )
+    )
+
+    assert memory_store.get(
+        user_id="user-001",
+        memory_id="response-style",
+    ) is None
