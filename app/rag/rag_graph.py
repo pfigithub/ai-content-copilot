@@ -18,6 +18,7 @@ from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
 
 from app.memory.policy import get_messages_to_remove
+from app.memory.container import shared_memory_store
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
@@ -80,7 +81,7 @@ class RAGGraph:
         self.store = (
             store
             if store is not None
-            else InMemoryStore()
+            else shared_memory_store
         )
 
         graph = StateGraph(

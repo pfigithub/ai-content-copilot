@@ -10,6 +10,7 @@ from app.exceptions import (
 )
 
 from app.api.v1.endpoints.content import router as content_router
+from app.api.v1.endpoints.memory import router as memory_router
 
 
 app = FastAPI(
@@ -28,6 +29,7 @@ app.add_exception_handler(
 )
 
 app.include_router(content_router)
+app.include_router(memory_router)
 
 
 @app.get("/")
