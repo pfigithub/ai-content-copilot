@@ -1,0 +1,32 @@
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: ai-content-copilot-postgres
+    restart: unless-stopped
+
+    environment:
+      # PostgreSQL administrator account
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Add POSTGRES_ADMIN_PASSWORD to .env}
+      POSTGRES_DB: ai_content_copilot
+
+      # Separate application account
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-ai_content_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Add POSTGRES_APP_PASSWORD to .env}
+
+    ports:
+      - "127.0.0.1:5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./scripts/init-app-user.sh:/docker-entrypoint-initdb.d/10-init-app-user.sh:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_content_copilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:

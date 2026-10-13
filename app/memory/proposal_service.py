@@ -92,7 +92,7 @@ class MemoryProposalService:
 
         return pending
 
-    def confirm(
+    async def confirm(
         self,
         proposal_id: str,
         user_id: str,
@@ -102,7 +102,7 @@ class MemoryProposalService:
             user_id=user_id,
         )
 
-        self.command_service.confirm(
+        await self.command_service.confirm(
             pending.proposal
         )
 

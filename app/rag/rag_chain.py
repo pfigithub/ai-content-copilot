@@ -196,9 +196,9 @@ class RAGChain:
             else:
                 role = message.type
                 
-        parts.append(
-            f"{role}: {message.content}"
-        )
+            parts.append(
+                f"{role}: {message.content}"
+            )
     
         return "\n".join(parts)
     

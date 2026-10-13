@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
 
@@ -14,7 +15,7 @@ MAX_USER_PREFERENCES = 10
 class UserMemoryStore:
     def __init__(
         self,
-        store: InMemoryStore | None = None,
+        store: BaseStore | None = None,
     ):
         self.store = (
             store
@@ -58,7 +59,7 @@ class UserMemoryStore:
             user_id,
         )
 
-    def save_explicit(
+    async def save_explicit(
         self,
         user_id: str,
         memory_id: str,
@@ -69,7 +70,15 @@ class UserMemoryStore:
         self._validate_memory_id(memory_id)
         self._validate_content(content)
 
-        self.store.put(
+        if memory_type not in {
+            "preference",
+            "self_reported_fact",
+        }:
+            raise ValueError(
+                "Unsupported memory_type."
+            )
+
+        await self.store.aput(
             self._namespace(user_id),
             memory_id,
             {
@@ -80,7 +89,7 @@ class UserMemoryStore:
             index=False,
         )
 
-    def get(
+    async def get(
         self,
         user_id: str,
         memory_id: str,
@@ -88,7 +97,7 @@ class UserMemoryStore:
         self._validate_user_id(user_id)
         self._validate_memory_id(memory_id)
 
-        item = self.store.get(
+        item = await self.store.aget(
             self._namespace(user_id),
             memory_id,
         )
@@ -98,7 +107,7 @@ class UserMemoryStore:
 
         return item.value
 
-    def delete(
+    async def delete(
         self,
         user_id: str,
         memory_id: str,
@@ -106,12 +115,12 @@ class UserMemoryStore:
         self._validate_user_id(user_id)
         self._validate_memory_id(memory_id)
 
-        self.store.delete(
+        await self.store.adelete(
             self._namespace(user_id),
             memory_id,
         )
 
-    def get_preferences(
+    async def get_preferences(
         self,
         user_id: str,
         limit: int = MAX_USER_PREFERENCES,
@@ -123,7 +132,7 @@ class UserMemoryStore:
                 "limit must be greater than zero."
             )
 
-        items = self.store.search(
+        items = await self.store.asearch(
             self._namespace(user_id),
             filter={
                 "memory_type": "preference",

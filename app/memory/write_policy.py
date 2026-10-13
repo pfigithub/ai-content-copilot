@@ -28,7 +28,7 @@ class MemoryWritePolicy:
     ):
         self.memory_store = memory_store
 
-    def write(
+    async def write(
         self,
         request: ExplicitMemoryRequest,
     ) -> None:
@@ -54,7 +54,7 @@ class MemoryWritePolicy:
                 "allowed length."
             )
 
-        self.memory_store.save_explicit(
+        await self.memory_store.save_explicit(
             user_id=request.user_id,
             memory_id=request.memory_id,
             content=content,

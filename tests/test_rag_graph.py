@@ -518,12 +518,14 @@ def test_rag_graph_loads_user_preferences_across_threads():
         store=store
     )
 
-    memory_store.save_explicit(
-        user_id="user-001",
-        memory_id="language",
-        content="کاربر پاسخ‌های فارسی می‌خواهد.",
+    asyncio.run(    
+        memory_store.save_explicit(
+            user_id="user-001",
+            memory_id="language",
+            content="کاربر پاسخ‌های فارسی می‌خواهد.",
+        )
     )
-
+    
     document = Document(
         page_content=(
             "آبیاری قطره‌ای می‌تواند "
@@ -642,8 +644,12 @@ def test_normal_conversation_does_not_write_long_term_memory():
             user_id="user-001",
         )
     )
+    
+    saved_memory = asyncio.run(
+        memory_store.get(
+            user_id="user-001",
+            memory_id="response-style",
+        )
+    )
 
-    assert memory_store.get(
-        user_id="user-001",
-        memory_id="response-style",
-    ) is None
+    assert saved_memory is None

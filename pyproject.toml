@@ -28,6 +28,8 @@ dependencies = [
     "langchain-text-splitters",
     "langchain-qdrant",
     "qdrant-client",
+    "langgraph-checkpoint-postgres",
+    "psycopg[binary,pool]",
 ]
 
 

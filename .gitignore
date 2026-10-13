@@ -3,8 +3,10 @@ venv/
 .venv/
 env/
 
-# Environment variables
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
 
 # Python cache
 __pycache__/

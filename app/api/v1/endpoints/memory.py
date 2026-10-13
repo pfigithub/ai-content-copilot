@@ -24,14 +24,26 @@ router = APIRouter(
 
 
 class MemoryProposalRequest(BaseModel):
-    user_id: str = Field(min_length=1, max_length=128)
-    memory_id: str = Field(min_length=1, max_length=128)
-    content: str = Field(min_length=1, max_length=500)
+    user_id: str = Field(
+        min_length=1,
+        max_length=128,
+    )
+    memory_id: str = Field(
+        min_length=1,
+        max_length=128,
+    )
+    content: str = Field(
+        min_length=1,
+        max_length=500,
+    )
     memory_type: MemoryType = "preference"
 
 
 class MemoryDecisionRequest(BaseModel):
-    user_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(
+        min_length=1,
+        max_length=128,
+    )
 
 
 class MemoryProposalResponse(BaseModel):
@@ -45,7 +57,11 @@ class MemoryProposalResponse(BaseModel):
 
 
 class MemoryActionResponse(BaseModel):
-    status: Literal["stored", "rejected", "deleted"]
+    status: Literal[
+        "stored",
+        "rejected",
+        "deleted",
+    ]
     memory_id: str
     memory_type: MemoryType | None = None
 
@@ -96,7 +112,7 @@ def create_memory_proposal(
     "/proposals/{proposal_id}/confirm",
     response_model=MemoryActionResponse,
 )
-def confirm_memory_proposal(
+async def confirm_memory_proposal(
     proposal_id: str,
     request: MemoryDecisionRequest,
     service: MemoryProposalService = Depends(
@@ -104,7 +120,7 @@ def confirm_memory_proposal(
     ),
 ):
     try:
-        proposal = service.confirm(
+        proposal = await service.confirm(
             proposal_id=proposal_id,
             user_id=request.user_id,
         )
@@ -169,14 +185,14 @@ def reject_memory_proposal(
     "/users/{user_id}/preferences",
     response_model=UserPreferencesResponse,
 )
-def list_user_preferences(
+async def list_user_preferences(
     user_id: str,
     store: UserMemoryStore = Depends(
         get_user_memory_store
     ),
 ):
     try:
-        preferences = store.get_preferences(
+        preferences = await store.get_preferences(
             user_id=user_id
         )
     except ValueError as exc:
@@ -195,7 +211,7 @@ def list_user_preferences(
     "/users/{user_id}/memories/{memory_id}",
     response_model=MemoryActionResponse,
 )
-def delete_user_memory(
+async def delete_user_memory(
     user_id: str,
     memory_id: str,
     store: UserMemoryStore = Depends(
@@ -203,7 +219,7 @@ def delete_user_memory(
     ),
 ):
     try:
-        store.delete(
+        await store.delete(
             user_id=user_id,
             memory_id=memory_id,
         )

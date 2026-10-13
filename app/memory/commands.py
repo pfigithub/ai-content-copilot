@@ -58,7 +58,7 @@ class MemoryCommandService:
             memory_type=memory_type,
         )
 
-    def confirm(
+    async def confirm(
         self,
         proposal: MemoryProposal,
     ) -> None:
@@ -70,4 +70,4 @@ class MemoryCommandService:
             confirmed_by_user=True,
         )
 
-        self.write_policy.write(request)
+        await self.write_policy.write(request)

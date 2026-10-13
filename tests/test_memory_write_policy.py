@@ -1,3 +1,5 @@
+import asyncio
+
 from langgraph.store.memory import InMemoryStore
 
 from app.memory.long_term_memory import UserMemoryStore
@@ -24,18 +26,22 @@ def test_confirmed_memory_request_is_saved():
         confirmed_by_user=True,
     )
 
-    policy.write(request)
+    asyncio.run(
+        policy.write(request)
+    )
 
-    memory = store.get(
-        user_id="user-001",
-        memory_id="language",
+    memory = asyncio.run(
+        store.get(
+            user_id="user-001",
+            memory_id="language",
+        )
     )
 
     assert memory is not None
-
     assert memory["content"] == (
         "کاربر پاسخ‌های فارسی می‌خواهد."
     )
+    assert memory["source"] == "user_explicit"
 
 
 def test_unconfirmed_memory_request_is_rejected():
@@ -55,7 +61,9 @@ def test_unconfirmed_memory_request_is_rejected():
     )
 
     try:
-        policy.write(request)
+        asyncio.run(
+            policy.write(request)
+        )
     except PermissionError as exc:
         assert str(exc) == (
             "Explicit user confirmation is required "
@@ -66,13 +74,14 @@ def test_unconfirmed_memory_request_is_rejected():
             "Expected PermissionError"
         )
 
-    assert (
+    memory = asyncio.run(
         store.get(
             user_id="user-001",
             memory_id="language",
         )
-        is None
     )
+
+    assert memory is None
 
 
 def test_memory_content_is_trimmed_before_saving():
@@ -91,13 +100,18 @@ def test_memory_content_is_trimmed_before_saving():
         confirmed_by_user=True,
     )
 
-    policy.write(request)
-
-    memory = store.get(
-        user_id="user-001",
-        memory_id="language",
+    asyncio.run(
+        policy.write(request)
     )
 
+    memory = asyncio.run(
+        store.get(
+            user_id="user-001",
+            memory_id="language",
+        )
+    )
+
+    assert memory is not None
     assert memory["content"] == "فارسی"
 
 
@@ -118,7 +132,9 @@ def test_memory_content_length_is_limited():
     )
 
     try:
-        policy.write(request)
+        asyncio.run(
+            policy.write(request)
+        )
     except ValueError as exc:
         assert str(exc) == (
             "Memory content exceeds the maximum "
@@ -128,3 +144,12 @@ def test_memory_content_length_is_limited():
         raise AssertionError(
             "Expected ValueError"
         )
+
+    memory = asyncio.run(
+        store.get(
+            user_id="user-001",
+            memory_id="large-memory",
+        )
+    )
+
+    assert memory is None

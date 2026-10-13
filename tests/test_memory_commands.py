@@ -1,3 +1,5 @@
+import asyncio
+
 from langgraph.store.memory import InMemoryStore
 
 from app.memory.commands import MemoryCommandService
@@ -32,13 +34,14 @@ def test_propose_does_not_write_memory():
 
     assert proposal.confirmation_required is True
 
-    assert (
+    memory = asyncio.run(
         store.get(
             user_id="user-001",
             memory_id="language",
         )
-        is None
     )
+
+    assert memory is None
 
 
 def test_confirm_writes_memory():
@@ -50,22 +53,22 @@ def test_confirm_writes_memory():
         content="کاربر پاسخ‌های فارسی می‌خواهد.",
     )
 
-    service.confirm(proposal)
+    asyncio.run(
+        service.confirm(proposal)
+    )
 
-    memory = store.get(
-        user_id="user-001",
-        memory_id="language",
+    memory = asyncio.run(
+        store.get(
+            user_id="user-001",
+            memory_id="language",
+        )
     )
 
     assert memory is not None
-
     assert memory["content"] == (
         "کاربر پاسخ‌های فارسی می‌خواهد."
     )
-
-    assert memory["source"] == (
-        "user_explicit"
-    )
+    assert memory["source"] == "user_explicit"
 
 
 def test_proposal_preserves_memory_type():
@@ -78,15 +81,13 @@ def test_proposal_preserves_memory_type():
         memory_type="self_reported_fact",
     )
 
-    assert (
-        proposal.memory_type
-        == "self_reported_fact"
-    )
+    assert proposal.memory_type == "self_reported_fact"
 
-    assert (
+    memory = asyncio.run(
         store.get(
             user_id="user-001",
             memory_id="profession",
         )
-        is None
     )
+
+    assert memory is None

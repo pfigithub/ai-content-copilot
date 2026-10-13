@@ -7,18 +7,15 @@ from typing import (
 )
 
 from langchain_core.documents import Document
-from langchain_core.messages import (
-    AIMessage,
-    AnyMessage,
-)
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
+from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
 from app.memory.policy import get_messages_to_remove
-from app.memory.container import shared_memory_store
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
@@ -50,7 +47,7 @@ class RAGGraph:
         rag_chain: RAGChain | None = None,
         contextualizer: QueryContextualizer | None = None,
         checkpointer=None,
-        store: InMemoryStore | None = None,
+        store: BaseStore | None = None,
     ):
         self.retriever = (
             retriever
@@ -81,7 +78,7 @@ class RAGGraph:
         self.store = (
             store
             if store is not None
-            else shared_memory_store
+            else InMemoryStore()
         )
 
         graph = StateGraph(
@@ -186,13 +183,11 @@ class RAGGraph:
             limit=10,
         )
 
-        preferences = [
-            item.value
-            for item in items
-        ]
-
         return {
-            "user_preferences": preferences,
+            "user_preferences": [
+                item.value
+                for item in items
+            ],
         }
 
     async def _contextualize(
@@ -317,12 +312,10 @@ class RAGGraph:
             [],
         )
 
-        messages_to_remove = (
-            get_messages_to_remove(messages)
-        )
-
         return {
-            "messages": messages_to_remove,
+            "messages": get_messages_to_remove(
+                messages
+            ),
         }
 
     async def answer(
@@ -416,3 +409,15 @@ class RAGGraph:
         }
 
         return self.graph.get_state(config)
+
+    async def aget_state(
+        self,
+        thread_id: str,
+    ):
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+
+        return await self.graph.aget_state(config)
