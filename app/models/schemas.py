@@ -31,6 +31,8 @@ TaskName = Literal[
 
 
 class ContentRequest(BaseModel):
+    """Validate content supplied for analysis or document ingestion."""
+
     model_config = ConfigDict(
         extra="forbid",
     )
@@ -38,17 +40,26 @@ class ContentRequest(BaseModel):
     text: str | None = Field(
         default=None,
         min_length=1,
-        description="Text to analyze",
+        description="Text to analyze or index.",
     )
 
     url: HttpUrl | None = Field(
         default=None,
-        description="URL of the content to analyze",
+        description="URL of the content to process.",
+    )
+
+    source: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Optional source label for text input. "
+            "URL inputs use the URL as their source."
+        ),
     )
 
     task: TaskName | None = Field(
         default=None,
-        description="Task to perform on the content",
+        description="Task to perform on the content.",
     )
 
     instruction: str | None = Field(
@@ -56,7 +67,7 @@ class ContentRequest(BaseModel):
         min_length=1,
         description=(
             "Optional user instruction that can refine the task "
-            "and determine the response language"
+            "and determine the response language."
         ),
     )
 
@@ -65,7 +76,9 @@ class ContentRequest(BaseModel):
     def validate_text(
         cls,
         value: str | None,
-    ):
+    ) -> str | None:
+        """Trim text and reject values containing only whitespace."""
+
         if value is not None:
             value = value.strip()
 
@@ -81,7 +94,9 @@ class ContentRequest(BaseModel):
     def validate_instruction(
         cls,
         value: str | None,
-    ):
+    ) -> str | None:
+        """Trim the instruction and reject blank values."""
+
         if value is not None:
             value = value.strip()
 
@@ -92,26 +107,44 @@ class ContentRequest(BaseModel):
 
         return value
 
+    @field_validator("source")
+    @classmethod
+    def validate_source_label(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        """Normalize an optional source label and reject blank labels."""
+
+        if value is not None:
+            value = value.strip()
+
+            if not value:
+                raise ValueError(
+                    "Source cannot contain only whitespace."
+                )
+
+        return value
+
     @model_validator(mode="after")
-    def validate_source(self):
-        if (
-            self.text is None
-            and self.url is None
-        ):
+    def validate_source(self) -> "ContentRequest":
+        """Ensure exactly one content input is provided with valid metadata."""
+
+        if self.text is None and self.url is None:
             raise ValueError(
                 "Either text or url must be provided."
             )
 
-        if (
-            self.text is not None
-            and self.url is not None
-        ):
+        if self.text is not None and self.url is not None:
             raise ValueError(
                 "Provide either text or url, not both."
             )
 
-        return self
+        if self.url is not None and self.source is not None:
+            raise ValueError(
+                "A custom source label can only be provided with text."
+            )
 
+        return self
 
 class NormalizedContent(BaseModel):
     content: str
@@ -129,6 +162,57 @@ class NormalizedContent(BaseModel):
     instruction: str | None = None
 
     source_language: str | None = None
+
+class RAGQueryRequest(BaseModel):
+    """Validate a question and its retrieval limit for the RAG API."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    question: str = Field(
+        min_length=1,
+        max_length=8000,
+        description="Question to answer using indexed content.",
+    )
+
+    k: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Maximum number of relevant document chunks to retrieve.",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        """Remove surrounding whitespace and reject blank questions."""
+
+        value = value.strip()
+
+        if not value:
+            raise ValueError(
+                "Question cannot contain only whitespace."
+            )
+
+        return value
+
+class DocumentIngestionResponse(BaseModel):
+    """Describe the result of storing content in the vector database."""
+
+    source_type: Literal["text", "url", "pdf"]
+
+    source: str | None = None
+
+    chunks_created: int = Field(
+        ge=1,
+        description="Number of document chunks stored.",
+    )
+
+    document_ids: list[str] = Field(
+        min_length=1,
+        description="IDs assigned to the stored document chunks.",
+    )
 
 class SummaryResult(BaseModel):
     title: str

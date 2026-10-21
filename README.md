@@ -1,137 +1,190 @@
+
 # AI Content Copilot
 
-A local-first AI content and research copilot built with Python, FastAPI, and Ollama.
+A local-first AI content and research copilot built with Python, FastAPI, LangChain, LangGraph, Ollama, and Qdrant.
 
-The project focuses on practical AI backend engineering, local LLM integration, structured AI processing, automation, and a provider-agnostic architecture.
+The project provides content processing and document-grounded research using local AI models. Its architecture is designed to remain provider-agnostic while keeping local execution and free tools as the default.
 
-## Current Status
+## Project Status
 
-Stage 1 — Completed
-
-Stage 1 provides a working local AI content processing service with text, URL, and PDF inputs, task-aware processing, multilingual handling, standardized errors, Ollama integration, automated tests, and n8n + Telegram integration.
+- Stage 1 — Completed: Core content processing API, local Ollama integration, structured outputs, standardized errors, automated tests, and n8n/Telegram integration.
+- Stage 2 — Completed: Document ingestion, vector retrieval, RAG, evidence assessment, bounded alternative search, and source-aware abstention.
+- Stage 3 — Next: Containerizing the application and improving reproducible deployment.
 
 ## Features
 
-* Text, URL, and PDF input
-* Summarize, analyze, and ideas tasks
-* Source-language detection
-* Explicit output-language handling
-* Local Ollama integration
-* Mock AI provider for testing
-* Structured AI outputs with Pydantic validation
-* Source-grounded processing and prompt-injection boundaries
-* Standardized API errors
-* Transient Ollama connection retries
-* n8n and Telegram integration
+### Content Processing
+
+- Text, URL, and PDF inputs
+- Summarization, analysis, and content idea generation
+- Source-language detection and explicit output-language handling
+- Structured AI outputs validated with Pydantic
+- Ollama and mock AI providers
+- Standardized API errors and transient connection retries
+- n8n and Telegram integration
+
+### Document Research and RAG
+
+- Ingest text, URLs, and PDF documents
+- Split documents into chunks and preserve source metadata
+- Generate embeddings locally using Ollama
+- Store and retrieve document chunks using Qdrant
+- Answer questions using retrieved document evidence
+- Return source information with RAG answers
+- Maintain conversation state by thread
+- Evaluate whether retrieved evidence supports the user's full question
+- Try one alternative retrieval query when evidence is insufficient
+- Expand retrieval for the alternative search within a bounded limit
+- Abstain when adequate evidence cannot be found after the permitted attempt
+
+The evidence evaluator and alternative-query planner use the configured local language model. Retrieved document contents are treated as untrusted evidence rather than system instructions.
 
 ## Architecture
 
+### Content Processing
+
 ```text
-Input
-├── Text
-├── URL
-└── PDF
-      ↓
+Text / URL / PDF
+        |
+        v
 Input Normalization
-      ↓
+        |
+        v
 Language Detection
-      ↓
+        |
+        v
 Task Registry
-      ↓
+        |
+        v
 Content Service
-      ↓
+        |
+        v
 AI Provider
-├── MockAIProvider
-└── OllamaProvider
-      ↓
+   |         |
+ Mock      Ollama
+        |
+        v
 Structured Output
 ```
 
-Integration:
+### Document Research
 
 ```text
-Telegram
-   ↓
-n8n
-   ↓
-FastAPI
-   ↓
-Ollama
-   ↓
-n8n
-   ↓
-Telegram
+Text / URL / PDF
+        |
+        v
+Document Ingestion
+        |
+        v
+Chunking and Metadata
+        |
+        v
+Local Embeddings
+        |
+        v
+Qdrant Vector Store
+        |
+        v
+Question and Retrieval
+        |
+        v
+Evidence Sufficiency Evaluation
+        |
+        +---- Evidence insufficient
+        |             |
+        |             v
+        |    One Alternative Search
+        |             |
+        |             v
+        |     Evaluate Evidence Again
+        |
+        v
+Grounded Answer with Sources
+        |
+        or
+        |
+        v
+Abstain if Evidence Remains Insufficient
 ```
 
-The core AI service remains independent from n8n and Telegram.
-
-## Supported Tasks
-
-### Summarize
-
-Produces a grounded summary based on the provided source.
-
-### Analyze
-
-Analyzes the main claims, reasoning, evidence, weaknesses, and implications supported by the source.
-
-### Ideas
-
-Generates several distinct and practical content ideas grounded in the source.
-
-## Supported Inputs
-
-* Text
-* URL
-* PDF
+PostgreSQL provides persistent application state and LangGraph checkpointing in the normal application configuration. In-memory implementations are used in the test environment.
 
 ## API
 
-### Analyze Content
+Interactive API documentation is available at `/docs` while the application is running locally.
+
+### Content Processing
+
+Analyze text or a URL:
 
 ```text
 POST /api/v1/content/analyze-content
+```
+
+Analyze a PDF for content-processing tasks:
+
+```text
+POST /api/v1/content/analyze-pdf
+```
+
+### Document Ingestion
+
+Ingest supported text or URL content into the document retrieval system:
+
+```text
+POST /api/v1/documents/ingest
+```
+
+Ingest a PDF document:
+
+```text
+POST /api/v1/documents/ingest-pdf
+```
+
+### Ask a Research Question
+
+```text
+POST /api/v1/rag/threads/{thread_id}/ask
 ```
 
 Example request:
 
 ```json
 {
-  "text": "Artificial intelligence is changing content creation.",
-  "task": "summarize"
+  "question": "What do the indexed documents establish about AI agents?",
+  "k": 4
 }
 ```
 
-### Analyze PDF
+The `question` field contains the research question. The optional `k` field controls the requested number of retrieved results and defaults to `4`; the supported range is `1` to `10`.
 
-```text
-POST /api/v1/content/analyze-pdf
-```
+RAG answers include source information from retrieved documents. If the available evidence is inadequate after the bounded alternative search, the system returns an abstention response rather than deliberately generating an unsupported answer.
 
-## AI Provider
+## Local Components
 
-The application uses a provider abstraction so the core service is not tied to a single AI implementation.
+- **Language model:** Ollama, currently configured with `qwen3:4b`
+- **Embedding model:** Ollama, currently configured with `qwen3-embedding:0.6b`
+- **Vector database:** Qdrant, collection `content_copilot`
+- **Persistent state and checkpointing:** PostgreSQL
+- **API framework:** FastAPI
+- **RAG orchestration:** LangGraph
+- **Data validation:** Pydantic
 
-Current providers:
-
-* MockAIProvider
-* OllamaProvider
-
-Default local model:
-
-```text
-qwen3:4b
-```
+Model names, service addresses, and credentials are configured through the application's settings and local environment configuration.
 
 ## Local Setup
 
-Create and activate a virtual environment, then install the project:
+Use Python `3.13` or a compatible version satisfying the project's declared requirements.
+
+Install the project and development dependencies:
 
 ```powershell
 python -m pip install -e ".[dev]"
 ```
 
-Make sure Ollama is running and the configured model is available.
+Create or update the local `.env` configuration using `.env.example` as a reference. Do not commit `.env` or put passwords and other secrets in source control.
+
+Ensure that the configured PostgreSQL, Qdrant, and Ollama services are running and that the configured Ollama models are available.
 
 Run the API:
 
@@ -139,48 +192,32 @@ Run the API:
 uvicorn app.main:app --reload
 ```
 
-The API will be available at:
+The application will be available at:
 
-```text
-http://127.0.0.1:8000
-```
+- API: `http://127.0.0.1:8000`
+- Interactive documentation: `http://127.0.0.1:8000/docs`
 
-Interactive API documentation:
-
-```text
-http://127.0.0.1:8000/docs
-```
+The document ingestion and RAG endpoints require the relevant local services to be available.
 
 ## Testing
 
-Run the complete test suite:
+Run the complete automated test suite:
 
 ```powershell
 python -m pytest -q
 ```
 
-## Error Handling
+The test suite includes coverage for API validation, document ingestion, Qdrant retrieval behavior, RAG graph routing, evidence sufficiency, alternative research queries, bounded retries, and abstention.
 
-The API uses a standardized error contract.
+Manual evaluation and local integration scripts are available under `scripts/` and `tests/`. These may require the configured local services and models to be running.
 
-| Code                       | HTTP |
-| -------------------------- | ---: |
-| VALIDATION_ERROR           |  422 |
-| PDF_EXTRACTION_FAILED      |  422 |
-| URL_FETCH_FAILED           |  502 |
-| AI_PROVIDER_RESPONSE_ERROR |  502 |
-| AI_PROVIDER_UNAVAILABLE    |  503 |
-| AI_PROVIDER_TIMEOUT        |  504 |
+The retrieval threshold and ranking results are evaluation-dependent. The current threshold is based on a small local evaluation dataset and is not a guarantee of retrieval quality on arbitrary documents.
 
-## n8n + Telegram
+## n8n and Telegram
 
-n8n can send requests to the local FastAPI service through:
+The existing integration can route Telegram messages through n8n to the local FastAPI service. The integration layer supports text messages, task commands, URL inputs, response formatting, and returning results to the originating chat.
 
-```text
-http://host.docker.internal:8000
-```
-
-The integration layer supports Telegram text messages, task commands, URL inputs, response formatting, and returning results to the originating chat.
+The core AI service remains independent of n8n and Telegram.
 
 ## Project Structure
 
@@ -188,27 +225,29 @@ The integration layer supports Telegram text messages, task commands, URL inputs
 ai-content-copilot/
 ├── app/
 │   ├── api/
+│   │   └── v1/
+│   │       └── endpoints/
+│   ├── memory/
 │   ├── models/
 │   ├── providers/
+│   ├── rag/
+│   ├── retrieval/
 │   ├── services/
-│   └── task_registry.py
+│   └── main.py
+├── scripts/
 ├── tests/
 ├── .env.example
 ├── .gitignore
+├── compose.yaml
 ├── LICENSE
 ├── pyproject.toml
 └── README.md
 ```
 
-## Stage 1 Result
+## Roadmap
 
-Stage 1 establishes the core AI backend and local integration foundation for the next stage of the project.
-
-## Next Stage
-
-Stage 2 will focus on professional agent capabilities:
-
-* LangChain
-* LangGraph
-* RAG
-* Vector Database
+- **Stage 1:** Core AI content-processing service — completed.
+- **Stage 2:** Document ingestion, retrieval, RAG, evidence evaluation, bounded alternative research, and source-aware abstention — completed.
+- **Stage 3:** Application containerization and reproducible local deployment.
+- **Stage 4:** AI security, prompt-injection defenses, data-leakage prevention, guardrails, and logging improvements.
+- **Stage 5:** MCP, tool calling, and more advanced agent workflows.

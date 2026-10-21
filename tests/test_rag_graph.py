@@ -14,6 +14,7 @@ class FakeRetriever:
         self.results = results
         self.calls = 0
         self.queries = []
+        self.score_thresholds = []
 
     async def retrieve(
         self,
@@ -23,6 +24,7 @@ class FakeRetriever:
     ):
         self.calls += 1
         self.queries.append(query)
+        self.score_thresholds.append(score_threshold)
 
         return self.results
 
@@ -653,3 +655,28 @@ def test_normal_conversation_does_not_write_long_term_memory():
     )
 
     assert saved_memory is None
+
+def test_rag_graph_forwards_score_threshold_to_retriever():
+    """Verify threshold forwarding and abstention when retrieval is empty."""
+
+    retriever = FakeRetriever(results=[])
+    model = FakeModel()
+
+    graph = RAGGraph(
+        retriever=retriever,
+        rag_chain=RAGChain(
+            retriever=retriever,
+            model=model,
+        ),
+    )
+
+    response = asyncio.run(
+        graph.answer(
+            query="A query without relevant sources",
+            score_threshold=0.4,
+        )
+    )
+
+    assert retriever.score_thresholds == [0.4]
+    assert response.sources == []
+    assert model.calls == 0

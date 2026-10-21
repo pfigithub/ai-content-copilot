@@ -18,6 +18,12 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from app.api.v1.endpoints.content import router as content_router
 from app.api.v1.endpoints.memory import router as memory_router
+from app.api.v1.endpoints.ingestion import (
+    router as ingestion_router,
+)
+from app.api.v1.endpoints.rag import (
+    router as rag_router,
+)
 from app.exception_handlers import (
     app_error_handler,
     validation_error_handler,
@@ -25,7 +31,14 @@ from app.exception_handlers import (
 from app.exceptions import AppError
 from app.memory.container import build_memory_services
 from app.memory.postgres_config import get_postgres_uri
+from app.services.document_ingestion_service import (
+    DocumentIngestionService,
+)
 from app.rag.rag_graph import RAGGraph
+from app.rag.research_query_planner import ResearchQueryPlanner
+from app.rag.evidence_sufficiency import (
+    EvidenceSufficiencyEvaluator,
+)
 
 
 def configure_app_resources(
@@ -33,6 +46,8 @@ def configure_app_resources(
     store: BaseStore,
     checkpointer,
 ) -> None:
+    """Create and register application-wide service dependencies."""
+
     memory_services = build_memory_services(
         store=store
     )
@@ -41,11 +56,22 @@ def configure_app_resources(
     application.state.checkpointer = checkpointer
     application.state.memory_services = memory_services
 
-    application.state.rag_graph = RAGGraph(
+    # Create the RAG graph once so ingestion can share its vector store.
+    rag_graph = RAGGraph(
         store=store,
         checkpointer=checkpointer,
+        query_planner=ResearchQueryPlanner(),
+        evidence_evaluator=EvidenceSufficiencyEvaluator(),
     )
 
+    application.state.rag_graph = rag_graph
+
+    # Ingested chunks must go into the same collection used by retrieval.
+    application.state.document_ingestion_service = (
+        DocumentIngestionService(
+            store=rag_graph.retriever.store
+        )
+    )
 
 def create_app(
     use_in_memory: bool | None = None,
@@ -120,6 +146,8 @@ def create_app(
 
     application.include_router(content_router)
     application.include_router(memory_router)
+    application.include_router(ingestion_router)
+    application.include_router(rag_router)
 
     @application.get("/")
     async def root():

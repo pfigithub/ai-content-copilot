@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -16,9 +17,20 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
 from app.memory.policy import get_messages_to_remove
+from app.rag.research_query_planner import ResearchQueryPlanner
+from app.rag.evidence_sufficiency import (
+    EvidenceSufficiencyEvaluator,
+)
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
+
+
+logger = logging.getLogger(__name__)
+
+# Initial candidate based on the current small retrieval evaluation.
+DEFAULT_SCORE_THRESHOLD = 0.4
+MAX_ALTERNATIVE_ATTEMPTS = 1
 
 
 @dataclass
@@ -38,6 +50,10 @@ class RAGGraphState(TypedDict, total=False):
     results: list[tuple[Document, float]]
     response: dict
     user_preferences: list[dict]
+    research_attempt: int
+    research_plan_failed: bool
+    evidence_sufficient: bool
+    evidence_assessment_reason: str
 
 
 class RAGGraph:
@@ -48,6 +64,8 @@ class RAGGraph:
         contextualizer: QueryContextualizer | None = None,
         checkpointer=None,
         store: BaseStore | None = None,
+        query_planner: ResearchQueryPlanner | None = None,
+        evidence_evaluator: EvidenceSufficiencyEvaluator | None = None,
     ):
         self.retriever = (
             retriever
@@ -62,6 +80,9 @@ class RAGGraph:
                 retriever=self.retriever
             )
         )
+
+        self.query_planner = query_planner
+        self.evidence_evaluator = evidence_evaluator
 
         self.contextualizer = (
             contextualizer
@@ -102,6 +123,16 @@ class RAGGraph:
         )
 
         graph.add_node(
+            "evaluate_evidence",
+            self._evaluate_evidence,
+        )
+
+        graph.add_node(
+            "plan_alternative_query",
+            self._plan_alternative_query,
+        )
+
+        graph.add_node(
             "generate",
             self._generate,
         )
@@ -136,6 +167,27 @@ class RAGGraph:
             self._route_after_retrieve,
             {
                 "generate": "generate",
+                "evaluate_evidence": "evaluate_evidence",
+                "plan_alternative_query": "plan_alternative_query",
+                "abstain": "abstain",
+            },
+        )
+
+        graph.add_conditional_edges(
+            "evaluate_evidence",
+            self._route_after_evaluation,
+            {
+                "generate": "generate",
+                "plan_alternative_query": "plan_alternative_query",
+                "abstain": "abstain",
+            },
+        )
+
+        graph.add_conditional_edges(
+            "plan_alternative_query",
+            self._route_after_plan,
+            {
+                "retrieve": "retrieve",
                 "abstain": "abstain",
             },
         )
@@ -221,36 +273,177 @@ class RAGGraph:
         self,
         state: RAGGraphState,
     ) -> dict:
+        """Retrieve evidence and discard results below the configured threshold."""
+
         retrieval_query = state.get(
             "retrieval_query",
             state["query"],
         )
 
+        score_threshold = state.get(
+            "score_threshold",
+            DEFAULT_SCORE_THRESHOLD,
+        )
+
         results = await self.retriever.retrieve(
             query=retrieval_query,
             k=state.get("k", 4),
-            score_threshold=state.get(
-                "score_threshold"
-            ),
+            score_threshold=score_threshold,
         )
+
+        if score_threshold is not None:
+            results = [
+                (document, score)
+                for document, score in results
+                if score >= score_threshold
+            ]
 
         return {
             "results": results,
         }
 
-    @staticmethod
-    def _route_after_retrieve(
+    async def _evaluate_evidence(
+        self,
         state: RAGGraphState,
-    ) -> Literal["generate", "abstain"]:
-        if state.get("results"):
+    ) -> dict:
+        """Evaluate retrieved evidence before deciding whether to answer."""
+
+        if self.evidence_evaluator is None:
+            return {
+                "evidence_sufficient": True,
+                "evidence_assessment_reason": (
+                    "Evaluator not configured; using the legacy path."
+                ),
+            }
+
+        try:
+            assessment = await self.evidence_evaluator.evaluate(
+                question=state["query"],
+                results=state.get("results", []),
+            )
+        except Exception:
+            logger.warning(
+                "Evidence evaluation failed; treating evidence as insufficient.",
+                exc_info=True,
+            )
+            return {
+                "evidence_sufficient": False,
+                "evidence_assessment_reason": (
+                    "Evaluation failed; an alternative retrieval is required."
+                ),
+            }
+
+        return {
+            "evidence_sufficient": assessment.sufficient,
+            "evidence_assessment_reason": assessment.reason,
+        }
+
+
+    @staticmethod
+    def _route_after_evaluation(
+        state: RAGGraphState,
+    ) -> Literal["generate", "plan_alternative_query", "abstain"]:
+        """Route based on evidence quality and the bounded retry budget."""
+
+        if state.get("evidence_sufficient", False):
             return "generate"
 
+        if state.get("research_attempt", 0) < MAX_ALTERNATIVE_ATTEMPTS:
+            return "plan_alternative_query"
+
         return "abstain"
+
+
+    def _route_after_retrieve(
+        self,
+        state: RAGGraphState,
+    ) -> Literal[
+        "generate",
+        "evaluate_evidence",
+        "plan_alternative_query",
+        "abstain",
+    ]:
+        """Route retrieval results to evaluation, generation, or a bounded retry."""
+
+        if state.get("results"):
+            if self.evidence_evaluator is not None:
+                return "evaluate_evidence"
+            return "generate"
+
+        if state.get("research_attempt", 0) < MAX_ALTERNATIVE_ATTEMPTS:
+            return "plan_alternative_query"
+
+        return "abstain"
+
+
+
+    async def _plan_alternative_query(
+        self,
+        state: RAGGraphState,
+    ) -> dict:
+        """Plan one different retrieval query after the initial search fails."""
+
+        if self.query_planner is None:
+            return {
+                "research_attempt": MAX_ALTERNATIVE_ATTEMPTS,
+                "research_plan_failed": True,
+            }
+
+        attempted_query = state.get(
+            "retrieval_query",
+            state["query"],
+        )
+
+        try:
+            alternative_query = (
+                await self.query_planner.create_alternative_query(
+                    question=state["query"],
+                    attempted_query=attempted_query,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Alternative retrieval planning failed; abstaining.",
+                exc_info=True,
+            )
+            alternative_query = None
+
+        candidate = (alternative_query or "").strip()
+
+        if (
+            not candidate
+            or candidate.casefold() == attempted_query.strip().casefold()
+        ):
+            return {
+                "research_attempt": MAX_ALTERNATIVE_ATTEMPTS,
+                "research_plan_failed": True,
+            }
+
+        return {
+            "retrieval_query": candidate,
+            "research_attempt": MAX_ALTERNATIVE_ATTEMPTS,
+            "research_plan_failed": False,
+            "k": min(max(state.get("k", 4) * 2, 8), 10),
+        }
+
+
+    @staticmethod
+    def _route_after_plan(
+        state: RAGGraphState,
+    ) -> Literal["retrieve", "abstain"]:
+        """Continue only when a distinct alternative query was produced."""
+
+        if state.get("research_plan_failed", True):
+            return "abstain"
+
+        return "retrieve"
 
     async def _generate(
         self,
         state: RAGGraphState,
     ) -> dict:
+        """Generate a grounded answer from the retrieved evidence."""
+
         messages = state.get(
             "messages",
             [],
@@ -258,19 +451,17 @@ class RAGGraph:
 
         history = messages[:-1]
 
-        response = (
-            await self.rag_chain.answer_from_results(
-                query=state["query"],
-                results=state.get(
-                    "results",
-                    [],
-                ),
-                history=history,
-                user_preferences=state.get(
-                    "user_preferences",
-                    [],
-                ),
-            )
+        response = await self.rag_chain.answer_from_results(
+            query=state["query"],
+            results=state.get(
+                "results",
+                [],
+            ),
+            history=history,
+            user_preferences=state.get(
+                "user_preferences",
+                [],
+            ),
         )
 
         return {
@@ -322,7 +513,7 @@ class RAGGraph:
         self,
         query: str,
         k: int = 4,
-        score_threshold: float | None = None,
+        score_threshold: float | None = DEFAULT_SCORE_THRESHOLD,
         thread_id: str = "default",
         user_id: str | None = None,
     ) -> RAGResponse:
@@ -348,6 +539,8 @@ class RAGGraph:
                         "content": query,
                     }
                 ],
+                "research_attempt": 0,
+                "research_plan_failed": False,
             },
             config,
             context=RAGContext(
@@ -363,7 +556,7 @@ class RAGGraph:
         self,
         query: str,
         k: int = 4,
-        score_threshold: float | None = None,
+        score_threshold: float | None = DEFAULT_SCORE_THRESHOLD,
         thread_id: str = "default",
         user_id: str | None = None,
     ) -> AsyncIterator[dict]:
@@ -389,6 +582,8 @@ class RAGGraph:
                         "content": query,
                     }
                 ],
+                "research_attempt": 0,
+                "research_plan_failed": False,
             },
             config,
             context=RAGContext(
