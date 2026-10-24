@@ -8,6 +8,7 @@ from fastapi import (
     File,
     Form,
     UploadFile,
+    HTTPException
 )
 
 from app.dependencies import get_ai_provider
@@ -39,6 +40,8 @@ from app.services.language_service import (
     detect_language,
 )
 
+from app.services.guardrail_service import InputGuardrail, SecurityViolationError
+
 router = APIRouter(
     prefix="/api/v1/content",
     tags=["content"],
@@ -69,6 +72,16 @@ async def analyze_content_endpoint(
             request
         )
     )
+    
+    # Apply security guardrail to the normalized content
+    guardrail = InputGuardrail()
+    try:
+        await guardrail.verify_safe_content(normalized_content.content)
+    except SecurityViolationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=exc.message,
+        )
 
     return await analyze_content(
         normalized_content,

@@ -36,6 +36,10 @@ from app.services.pdf_service import (
     extract_text_from_pdf,
 )
 
+from app.services.guardrail_service import (
+    InputGuardrail,
+    SecurityViolationError,
+)
 
 router = APIRouter(
     prefix="/api/v1/documents",
@@ -81,6 +85,16 @@ async def ingest_content_endpoint(
         raise HTTPException(
             status_code=422,
             detail="No extractable content was found.",
+        )
+    
+    # Apply security guardrail to the normalized content
+    guardrail = InputGuardrail()
+    try:
+        await guardrail.verify_safe_content(normalized_content.content)
+    except SecurityViolationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=exc.message,
         )
 
     return await ingestion_service.ingest(
@@ -173,6 +187,16 @@ async def ingest_pdf_endpoint(
             ),
             source_language=detect_language(text),
         )
+        
+        # Apply security guardrail to the normalized content
+        guardrail = InputGuardrail()
+        try:
+            await guardrail.verify_safe_content(normalized_content.content)
+        except SecurityViolationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=exc.message,
+            )
 
         return await ingestion_service.ingest(
             normalized_content
