@@ -24,6 +24,7 @@ from app.rag.evidence_sufficiency import (
 from app.rag.query_contextualizer import QueryContextualizer
 from app.rag.rag_chain import RAGChain, RAGResponse
 from app.retrieval.retriever import ContentRetriever
+from app.services.guardrail_service import InputGuardrail, OutputGuardrail, SecurityViolationError
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class RAGGraph:
         store: BaseStore | None = None,
         query_planner: ResearchQueryPlanner | None = None,
         evidence_evaluator: EvidenceSufficiencyEvaluator | None = None,
+        output_guardrail: OutputGuardrail | None = None,
     ):
         self.retriever = (
             retriever
@@ -83,6 +85,7 @@ class RAGGraph:
 
         self.query_planner = query_planner
         self.evidence_evaluator = evidence_evaluator
+        self.output_guardrail = output_guardrail if output_guardrail is not None else OutputGuardrail()
 
         self.contextualizer = (
             contextualizer
@@ -444,33 +447,31 @@ class RAGGraph:
     ) -> dict:
         """Generate a grounded answer from the retrieved evidence."""
 
-        messages = state.get(
-            "messages",
-            [],
-        )
-
+        messages = state.get("messages", [])
         history = messages[:-1]
 
         response = await self.rag_chain.answer_from_results(
             query=state["query"],
-            results=state.get(
-                "results",
-                [],
-            ),
+            results=state.get("results", []),
             history=history,
-            user_preferences=state.get(
-                "user_preferences",
-                [],
-            ),
+            user_preferences=state.get("user_preferences", []),
         )
+
+        # Execute output guardrail to prevent data leakage or harmful content
+        try:
+            if self.output_guardrail is not None:
+                await self.output_guardrail.verify_safe_output(response.answer)
+        except SecurityViolationError as exc:
+            logger.warning("Output guardrail triggered", exc_info=True)
+            # Replace malicious response with a safe fallback message
+            response = RAGResponse(
+                answer="The response was blocked due to security policy violations.",
+                sources=[],
+            )
 
         return {
             "response": response.model_dump(),
-            "messages": [
-                AIMessage(
-                    content=response.answer
-                )
-            ],
+            "messages": [AIMessage(content=response.answer)],
         }
 
     @staticmethod
