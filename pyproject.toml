@@ -30,6 +30,7 @@ dependencies = [
     "qdrant-client",
     "langgraph-checkpoint-postgres",
     "psycopg[binary,pool]",
+    "duckduckgo-search>=6.0.0",
 ]
 
 
