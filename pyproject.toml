@@ -31,6 +31,8 @@ dependencies = [
     "langgraph-checkpoint-postgres",
     "psycopg[binary,pool]",
     "duckduckgo-search>=6.0.0",
+    "mcp",
+    "langchain-mcp-adapters == 0.1.0",
 ]
 
 

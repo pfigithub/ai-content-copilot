@@ -1,39 +1,49 @@
+"""
+Ultimate test script: Combines static Tools (Qdrant, Web) 
+with dynamic MCP Tools (Time, Files) in the LangGraph Agent.
+"""
+
 import asyncio
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_core.messages import HumanMessage
 from app.rag.rag_graph import RAGGraph
 
 async def main():
-    agent = RAGGraph()
-
-    print("--- Test 1: Normal Chat ---")
-    query1 = "سلام، خسته نباشید. تو کی هستی؟"
-    print(f"User: {query1}")
+    print("1. Booting up MCP Server to discover dynamic tools...")
+    client = MultiServerMCPClient(
+        {
+            "local_system": {
+                "command": "python",
+                "args": ["scripts/local_mcp_server.py"],
+                "transport": "stdio",
+            }
+        }
+    )
     
-    result1 = await agent.graph.ainvoke({"messages": [HumanMessage(content=query1)]})
-    print(f"AI: {result1['messages'][-1].content}\n")
+    # Extract dynamic tools from the MCP server
+    mcp_tools = await client.get_tools()
     
-    print("--- Test 2: Knowledge Query ---")
-    query2 = "برنامه مدیریت آب شهر چیست؟"
-    print(f"User: {query2}")
+    print("2. Initializing Agent and combining all tools...")
+    # Pass the discovered MCP tools into our RAGGraph
+    agent = RAGGraph(mcp_tools=mcp_tools)
     
-    result2 = await agent.graph.ainvoke({"messages": [HumanMessage(content=query2)]})
-    print(f"AI: {result2['messages'][-1].content}")
+    print(f"Agent's Weaponized Arsenal: {[t.name for t in agent.tools]}\n")
     
-    # چاپ لاگ ابزارها برای بررسی رفتار Agent
-    for msg in result2['messages']:
+    print("--- Ultimate Agent Multi-Tool Test ---")
+    query = "ساعت دقیق الان چنده؟ و ضمناً برنامه مدیریت آب شهر چیست؟"
+    print(f"User: {query}")
+    
+    result = await agent.graph.ainvoke({"messages": [HumanMessage(content=query)]})
+    print(f"\nAI Final Answer:\n{result['messages'][-1].content}")
+    
+    print("\n--- Backend Decision Trace ---")
+    for msg in result['messages']:
         if msg.type == 'ai' and msg.tool_calls:
-            print(f"\n[System Log]: Agent decided to use tool -> {msg.tool_calls[0]['name']}")
-
-    print("\n--- Test 3: Web Search Query ---")
-    query3 = "پایتخت کشور ژاپن کجاست و امروز هوا در آنجا چطور است؟"
-    print(f"User: {query3}")
-    
-    result3 = await agent.graph.ainvoke({"messages": [HumanMessage(content=query3)]})
-    print(f"AI: {result3['messages'][-1].content}")
-    
-    for msg in result3['messages']:
-        if msg.type == 'ai' and msg.tool_calls:
-            print(f"\n[System Log]: Agent decided to use tool -> {msg.tool_calls[0]['name']}")
+            for tool_call in msg.tool_calls:
+                print(f"[System Log]: Agent chose tool -> {tool_call['name']}")
+                
+    if hasattr(client, 'close'):
+        await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
