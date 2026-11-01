@@ -24,6 +24,9 @@ from app.api.v1.endpoints.ingestion import (
 from app.api.v1.endpoints.rag import (
     router as rag_router,
 )
+from app.api.v1.endpoints.chat import (
+    router as chat_router,
+)
 from app.exception_handlers import (
     app_error_handler,
     validation_error_handler,
@@ -148,6 +151,7 @@ def create_app(
     application.include_router(memory_router)
     application.include_router(ingestion_router)
     application.include_router(rag_router)
+    application.include_router(chat_router)
 
     @application.get("/")
     async def root():

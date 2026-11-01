@@ -33,6 +33,7 @@ dependencies = [
     "duckduckgo-search>=6.0.0",
     "mcp",
     "langchain-mcp-adapters == 0.1.0",
+    "langchain-google-genai",
 ]
 
 
