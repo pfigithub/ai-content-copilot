@@ -34,6 +34,8 @@ dependencies = [
     "mcp",
     "langchain-mcp-adapters == 0.1.0",
     "langchain-google-genai",
+    "streamlit>=1.30.0",
+    "requests",
 ]
 
 
