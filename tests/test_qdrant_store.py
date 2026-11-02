@@ -250,49 +250,25 @@ def test_qdrant_store_deletes_only_trailing_chunks(monkeypatch):
 
 @pytest.mark.anyio
 async def test_qdrant_store_forwards_score_threshold(monkeypatch):
-    """Verify that the score threshold reaches the vector store unchanged."""
-
-    expected_results = [
-        (Document(page_content="Relevant content."), 0.62),
-    ]
-
+    expected_results = [(Document(page_content="Relevant content."), 0.62)]
     vector_store = MagicMock()
-    vector_store.asimilarity_search_with_score = AsyncMock(
-        return_value=expected_results,
-    )
-
+    vector_store.asimilarity_search_with_score = AsyncMock(return_value=expected_results)
     vector_store_factory = MagicMock()
-    vector_store_factory.from_existing_collection.return_value = (
-        vector_store
-    )
+    vector_store_factory.from_existing_collection.return_value = vector_store
 
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantClient",
-        MagicMock(),
-    )
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.OllamaEmbeddingProvider",
-        lambda: SimpleNamespace(embeddings=object()),
-    )
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantVectorStore",
-        vector_store_factory,
-    )
+    monkeypatch.setattr("app.retrieval.qdrant_store.QdrantClient", MagicMock())
+    monkeypatch.setattr("app.retrieval.qdrant_store.OllamaEmbeddingProvider", lambda: SimpleNamespace(embeddings=object()))
+    monkeypatch.setattr("app.retrieval.qdrant_store.QdrantVectorStore", vector_store_factory)
 
     store = QdrantStore(collection_name="test_collection")
-
-    results = await store.similarity_search_with_score(
-        query="A test retrieval query.",
-        k=3,
-        score_threshold=0.4,
-    )
+    results = await store.similarity_search_with_score(query="A test retrieval query.", k=3, score_threshold=0.4)
 
     assert results == expected_results
-
     vector_store.asimilarity_search_with_score.assert_awaited_once_with(
         "A test retrieval query.",
         k=3,
         score_threshold=0.4,
+        filter=None # 🟢 FIX: Added missing filter parameter check
     )
 
 

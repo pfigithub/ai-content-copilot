@@ -15,6 +15,7 @@ from app.memory.proposal_service import (
     MemoryProposalNotFoundError,
     MemoryProposalService,
 )
+from app.dependencies import get_current_user
 
 
 router = APIRouter(
@@ -78,10 +79,12 @@ class UserPreferencesResponse(BaseModel):
 )
 def create_memory_proposal(
     request: MemoryProposalRequest,
-    service: MemoryProposalService = Depends(
-        get_memory_proposal_service
-    ),
+    service: MemoryProposalService = Depends(get_memory_proposal_service),
+    current_user: str = Depends(get_current_user)
 ):
+    if request.user_id != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this user's memory.")
+
     try:
         pending = service.propose(
             user_id=request.user_id,
@@ -115,10 +118,12 @@ def create_memory_proposal(
 async def confirm_memory_proposal(
     proposal_id: str,
     request: MemoryDecisionRequest,
-    service: MemoryProposalService = Depends(
-        get_memory_proposal_service
-    ),
+    service: MemoryProposalService = Depends(get_memory_proposal_service),
+    current_user: str = Depends(get_current_user)
 ):
+    if request.user_id != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
     try:
         proposal = await service.confirm(
             proposal_id=proposal_id,
@@ -154,10 +159,12 @@ async def confirm_memory_proposal(
 def reject_memory_proposal(
     proposal_id: str,
     request: MemoryDecisionRequest,
-    service: MemoryProposalService = Depends(
-        get_memory_proposal_service
-    ),
+    service: MemoryProposalService = Depends(get_memory_proposal_service),
+    current_user: str = Depends(get_current_user)
 ):
+    if request.user_id != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
     try:
         proposal = service.reject(
             proposal_id=proposal_id,
@@ -187,10 +194,12 @@ def reject_memory_proposal(
 )
 async def list_user_preferences(
     user_id: str,
-    store: UserMemoryStore = Depends(
-        get_user_memory_store
-    ),
+    store: UserMemoryStore = Depends(get_user_memory_store),
+    current_user: str = Depends(get_current_user)
 ):
+    if user_id != current_user:
+         raise HTTPException(status_code=403, detail="Not authorized to read this user's memory.")
+
     try:
         preferences = await store.get_preferences(
             user_id=user_id
@@ -214,10 +223,12 @@ async def list_user_preferences(
 async def delete_user_memory(
     user_id: str,
     memory_id: str,
-    store: UserMemoryStore = Depends(
-        get_user_memory_store
-    ),
+    store: UserMemoryStore = Depends(get_user_memory_store),
+    current_user: str = Depends(get_current_user)
 ):
+    if user_id != current_user:
+         raise HTTPException(status_code=403, detail="Not authorized to delete this user's memory.")
+
     try:
         await store.delete(
             user_id=user_id,
