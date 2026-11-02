@@ -1,12 +1,14 @@
 import streamlit as st
 import requests
 import uuid
+import os
 
-# Configuration
-API_URL_CHAT = "http://127.0.0.1:8080/api/v1/chat/"
-API_URL_CONTENT = "http://127.0.0.1:8080/api/v1/content/analyze-content"
-API_URL_PDF = "http://127.0.0.1:8080/api/v1/content/analyze-pdf"
-INGEST_URL = "http://127.0.0.1:8080/api/v1/documents/ingest-pdf"
+# Dynamic routing for Docker internal network (defaults to 'api:8000')
+API_BASE = os.getenv("API_BASE_URL", "http://api:8000")
+API_URL_CHAT = f"{API_BASE}/api/v1/chat/"
+API_URL_CONTENT = f"{API_BASE}/api/v1/content/analyze-content"
+API_URL_PDF = f"{API_BASE}/api/v1/content/analyze-pdf"
+INGEST_URL = f"{API_BASE}/api/v1/documents/ingest-pdf"
 
 st.set_page_config(page_title="AI Content Copilot", page_icon="🤖", layout="wide")
 

@@ -28,17 +28,24 @@ services:
       - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   api:
     build:
       context: .
     container_name: ai-content-copilot-api
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./workspace:/app/workspace
     env_file:
       - .env
     environment:
@@ -52,6 +59,22 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+    container_name: ai-content-copilot-frontend
+    restart: unless-stopped
+    command: streamlit run frontend_app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - ./frontend_app.py:/app/frontend_app.py
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
         condition: service_started
 
 volumes:
