@@ -14,7 +14,8 @@ from app.services.document_ingestion_service import DocumentIngestionService
 from app.services.input_service import normalize_content
 from app.services.language_service import detect_language
 from app.services.pdf_service import extract_text_from_pdf
-from app.services.guardrail_service import InputGuardrail, SecurityViolationError
+# 🟢 FIX: Import IngestionGuardrail instead of InputGuardrail
+from app.services.guardrail_service import IngestionGuardrail, SecurityViolationError
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
@@ -34,9 +35,10 @@ async def ingest_content_endpoint(
     if not normalized_content.content.strip():
         raise HTTPException(status_code=422, detail="No extractable content was found.")
     
-    guardrail = InputGuardrail()
+    # 🟢 FIX: Use IngestionGuardrail
+    guardrail = IngestionGuardrail()
     try:
-        await guardrail.verify_safe_content(normalized_content.content)
+        await guardrail.verify_safe_document(normalized_content.content)
     except SecurityViolationError as exc:
         raise HTTPException(status_code=400, detail=exc.message)
 
@@ -69,7 +71,6 @@ async def ingest_pdf_endpoint(
                     )
                 temp_file.write(chunk)
 
-        # Extract both full text and page-separated data for accurate RAG citation
         text, pages_data = extract_text_from_pdf(temp_path)
 
         if not text or not text.strip():
@@ -82,12 +83,13 @@ async def ingest_pdf_endpoint(
             task=task,
             instruction=(instruction.strip() if instruction and instruction.strip() else None),
             source_language=detect_language(text),
-            pages=pages_data,  # Injecting page data for downstream splitting
+            pages=pages_data, 
         )
         
-        guardrail = InputGuardrail()
+        # 🟢 FIX: Use IngestionGuardrail
+        guardrail = IngestionGuardrail()
         try:
-            await guardrail.verify_safe_content(normalized_content.content)
+            await guardrail.verify_safe_document(normalized_content.content)
         except SecurityViolationError as exc:
             raise HTTPException(status_code=400, detail=exc.message)
 

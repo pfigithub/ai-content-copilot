@@ -14,6 +14,7 @@ WORKDIR /app
 # Copy project configuration and source code
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 
 # Install the application and its dependencies
 RUN pip install .

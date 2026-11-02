@@ -24,6 +24,10 @@ ContentResponseModel = (
     SummaryContentResponse | AnalysisContentResponse | IdeasContentResponse
 )
 
+# 🟢 FIX: Add size limits
+MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024
+UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
+
 @router.post("/analyze-content", response_model=ContentResponseModel)
 async def analyze_content_endpoint(
     request: ContentRequest,
@@ -47,19 +51,26 @@ async def analyze_pdf_endpoint(
     instruction: str | None = Form(default=None),
 ):
     suffix = os.path.splitext(file.filename or "")[1]
+    total_bytes = 0 # 🟢 FIX: Track total bytes
+    
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
         temp_path = temp_file.name
         try:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = await file.read(UPLOAD_CHUNK_SIZE_BYTES)
                 if not chunk:
                     break
+                total_bytes += len(chunk)
+                # 🟢 FIX: Enforce size limit
+                if total_bytes > MAX_PDF_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413, detail="The PDF exceeds the maximum allowed size of 20 MiB."
+                    )
                 temp_file.write(chunk)
         finally:
             await file.close()
 
     try:
-        # We only need the full text for content analysis, ignore page data here
         text, _ = extract_text_from_pdf(temp_path)
         detected_lang = detect_language(text)
 
@@ -74,4 +85,5 @@ async def analyze_pdf_endpoint(
 
         return await analyze_content(normalized_content, ai_provider)
     finally:
-        os.remove(temp_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
