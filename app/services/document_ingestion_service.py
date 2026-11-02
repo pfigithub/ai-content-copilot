@@ -23,7 +23,9 @@ class DocumentIngestionService:
             content_hash = hashlib.sha256(content.content.strip().encode("utf-8")).hexdigest()
             source_identity = f"content-sha256:{content_hash}"
             
-        identity = f"ai-content-copilot:{content.source_type}:{source_identity}"
+        # 🟢 FIX: Include user_id in the deterministic UUID to prevent cross-tenant collision
+        safe_user = content.user_id if content.user_id else "global_tenant"
+        identity = f"ai-content-copilot:{safe_user}:{content.source_type}:{source_identity}"
         return str(uuid5(NAMESPACE_URL, identity))
 
     async def ingest(
@@ -32,12 +34,10 @@ class DocumentIngestionService:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     ) -> DocumentIngestionResponse:
-        """Split content and insert or update its chunks in Qdrant."""
-        
+        # بقیه کدهای این متد دقیقاً مثل قبل باقی می‌ماند...
         if not content.content or not content.content.strip():
             raise ValueError("Content cannot be empty.")
 
-        # Pass page data to the splitter if available
         documents = await asyncio.to_thread(
             split_document,
             text=content.content,
@@ -51,6 +51,8 @@ class DocumentIngestionService:
         source_id = self._build_source_id(content)
         for document in documents:
             document.metadata["source_id"] = source_id
+            if content.user_id:
+                document.metadata["user_id"] = content.user_id
 
         document_ids = [
             str(uuid5(NAMESPACE_URL, f"{source_id}:chunk:{document.metadata['chunk_index']}"))

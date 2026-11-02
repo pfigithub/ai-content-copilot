@@ -28,25 +28,16 @@ class ContentRetriever:
         query: str,
         k: int = DEFAULT_TOP_K,
         score_threshold: float | None = None,
+        user_id: str | None = None,
     ) -> list[tuple[Document, float]]:
-
         if not query or not query.strip():
-            raise ValueError(
-                "Query cannot be empty."
-            )
-
+            raise ValueError("Query cannot be empty.")
         if k <= 0:
-            raise ValueError(
-                "k must be greater than zero."
-            )
+            raise ValueError("k must be greater than zero.")
 
-        results = await (
-            self.store
-            .similarity_search_with_score(
-                query=query,
-                k=k,
-                score_threshold=score_threshold,
-            )
+        return await self.store.similarity_search_with_score(
+            query=query,
+            k=k,
+            score_threshold=score_threshold,
+            user_id=user_id,
         )
-
-        return results

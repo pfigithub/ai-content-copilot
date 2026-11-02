@@ -75,7 +75,8 @@ class NormalizedContent(BaseModel):
     task: TaskName | None = None
     instruction: str | None = None
     source_language: str | None = None
-    pages: list[dict] | None = None  # Added to track page-level data
+    pages: list[dict] | None = None
+    user_id: str | None = None
 
 class RAGQueryRequest(BaseModel):
     """Validate a question and its retrieval limit for the RAG API."""

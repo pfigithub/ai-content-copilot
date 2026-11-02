@@ -1,26 +1,57 @@
+import logging
 from langchain_core.tools import tool
-from app.retrieval.retriever import ContentRetriever
+from langchain_core.runnables import RunnableConfig
 from langchain_community.tools import DuckDuckGoSearchRun
+from app.retrieval.retriever import ContentRetriever
+from app.rag.evidence_sufficiency import EvidenceSufficiencyEvaluator
+from app.rag.research_query_planner import ResearchQueryPlanner
+
+logger = logging.getLogger(__name__)
 
 @tool
-async def search_internal_documents(query: str) -> str:
+async def search_internal_documents(query: str, config: RunnableConfig) -> str:
     """
     Search the internal database (Qdrant) for documents, PDFs, and personal knowledge base.
     USE THIS TOOL ONLY WHEN the user asks about specific facts, uploaded files, or personal knowledge.
     """
     try:
+        user_id = config.get("configurable", {}).get("user_id")
         retriever = ContentRetriever()
-        results = await retriever.retrieve(query=query, k=20)
+        evaluator = EvidenceSufficiencyEvaluator()
+        planner = ResearchQueryPlanner()
+        
+        # 1. Initial Retrieval
+        results = await retriever.retrieve(query=query, k=8, user_id=user_id)
         
         if not results:
             return "No relevant information found in the internal database."
             
+        # 2. Self-Reflective Evaluation
+        try:
+            assessment = await evaluator.evaluate(question=query, results=results)
+            if not assessment.sufficient:
+                logger.info(f"Evidence insufficient. Planning alternative...")
+                alt_query = await planner.create_alternative_query(question=query, attempted_query=query)
+                
+                if alt_query and alt_query.strip().casefold() != query.strip().casefold():
+                    alt_results = await retriever.retrieve(query=alt_query, k=8, user_id=user_id)
+                    
+                    # Merge results (avoiding duplicates by source and chunk_index)
+                    seen = {(d.metadata.get("source"), d.metadata.get("chunk_index")) for d, _ in results}
+                    for doc, score in alt_results:
+                        key = (doc.metadata.get("source"), doc.metadata.get("chunk_index"))
+                        if key not in seen:
+                            results.append((doc, score))
+                            seen.add(key)
+        except Exception as e:
+            logger.warning(f"Advanced RAG evaluation skipped due to error: {e}")
+            
+        # 4. Format and Return Final Context
         context_parts = []
         for index, (document, _) in enumerate(results, start=1):
             source = document.metadata.get("source", "unknown")
             source_type = document.metadata.get("source_type", "unknown")
             
-            # Extract page number (adding 1 since metadata index usually starts at 0)
             page_meta = document.metadata.get("page")
             page_num = str(int(page_meta) + 1) if isinstance(page_meta, (int, float)) or (isinstance(page_meta, str) and page_meta.isdigit()) else "unknown"
             
@@ -31,8 +62,9 @@ async def search_internal_documents(query: str) -> str:
             )
             
         return "\n\n".join(context_parts)
+        
     except Exception as e:
-        # If the database is cleared or unavailable, pass this error to the Agent
+        logger.error(f"Internal search error: {e}")
         return "The internal database is currently empty or unavailable. Tell the user you don't have internal documents right now."
 
 @tool

@@ -1,7 +1,9 @@
 import logging
+import os
 from typing import Annotated, Sequence, TypedDict
 
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -12,14 +14,15 @@ from app.rag.tools import search_internal_documents, search_web
 from app.services.guardrail_service import OutputGuardrail, SecurityViolationError
 from app.retrieval.retriever import ContentRetriever
 from app.rag.rag_chain import RAGResponse
+# 🟢 NEW: Memory integration imports
+from app.memory.long_term_memory import UserMemoryStore
+from app.memory.policy import get_messages_to_remove
 
 logger = logging.getLogger(__name__)
-
 
 class AgentState(TypedDict):
     """The state of the agent, maintaining the history of messages."""
     messages: Annotated[Sequence[BaseMessage], add_messages]
-
 
 class RAGGraph:
     """An autonomous Agent that decides when to use tools and when to chat."""
@@ -43,31 +46,20 @@ class RAGGraph:
         if mcp_tools:
             self.tools.extend(mcp_tools)
             
-        import os
-        # 1. SAFETY SWITCH: Mock model for automated testing
         if os.getenv("APP_ENV") == "test":
             from langchain_core.runnables import RunnableLambda
             self.model = RunnableLambda(lambda x: AIMessage(content="Test response"))
             self.model_with_tools = self.model
         else:
-            # 2. HYBRID AI ARCHITECTURE (Dual-Brain)
-            # Brain B: The Offline Local Model (Llama 3.1)
-            local_llm = ChatOllama(
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url,
-                temperature=0,
-            )
+            local_llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_base_url, temperature=0)
             gemini_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY")
             
             if gemini_key:
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                self.model = ChatGoogleGenerativeAI(
-                    model="gemini-3.5-flash",
-                    google_api_key=gemini_key,
-                    temperature=0,
-                )
+                # The specialist requested model configurability, we stick to the working 1.5-flash
+                self.model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=gemini_key, temperature=0)
                 print("\n" + "🔥" * 25)
-                print("🚀 GEMINI 3.5 FLASH IS ACTIVE (HYBRID MODE)")
+                print("🚀 GEMINI FLASH IS ACTIVE (HYBRID MODE)")
                 print("🔥" * 25 + "\n")
             else:
                 self.model = local_llm
@@ -107,30 +99,46 @@ class RAGGraph:
         
         self.graph = builder.compile(checkpointer=self.checkpointer, store=self.store)
 
-    async def call_model(self, state: AgentState) -> dict:
+    async def call_model(self, state: AgentState, config: RunnableConfig) -> dict:
         messages = state["messages"]
-        if not messages or not isinstance(messages[0], SystemMessage):
-            messages = [self.system_prompt] + list(messages)
+        user_id = config.get("configurable", {}).get("user_id")
+
+        # 🟢 FIX: 1. Prune Short-Term Memory (Prevent token overflow)
+        messages_to_remove = get_messages_to_remove(messages, max_messages=20)
+        active_messages = [m for m in messages if m not in messages_to_remove]
+
+        # 🟢 FIX: 2. Inject Long-Term Memory (User Preferences)
+        prefs_text = ""
+        if user_id and self.store:
+            try:
+                memory_store = UserMemoryStore(self.store)
+                prefs = await memory_store.get_preferences(user_id)
+                if prefs:
+                    prefs_text = "\n\nUSER PREFERENCES (Follow these rules strictly):\n"
+                    prefs_text += "\n".join([f"- {p['content']}" for p in prefs])
+            except Exception as e:
+                logger.warning(f"Could not load preferences for {user_id}: {e}")
+
+        # Construct final dynamic system prompt
+        sys_msg = SystemMessage(content=self.system_prompt.content + prefs_text)
+        
+        if not active_messages or not isinstance(active_messages[0], SystemMessage):
+            final_messages = [sys_msg] + active_messages
+        else:
+            final_messages = [sys_msg] + active_messages[1:]
             
         try:
-            # Attempt to use the primary model (Gemini)
-            response = await self.model_with_tools.ainvoke(messages)
-            return {"messages": [response]}
+            response = await self.model_with_tools.ainvoke(final_messages)
+            # Returning messages_to_remove instructs LangGraph checkpointer to delete them
+            return {"messages": messages_to_remove + [response]}
         except Exception as e:
             logger.error(f"Primary model failed ({e}). FALLING BACK TO LOCAL LLAMA 3.1...")
-            # Instantiate local connection on the fly to rescue the system
             from langchain_ollama import ChatOllama
-            local_llm = ChatOllama(
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url,
-                temperature=0,
-            )
+            local_llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_base_url, temperature=0)
             local_model_with_tools = local_llm.bind_tools(self.tools)
-            response = await local_model_with_tools.ainvoke(messages)
-            
-            # Add an invisible tag to the response for debugging purposes
+            response = await local_model_with_tools.ainvoke(final_messages)
             response.content = f"[Offline Fallback Active] {response.content}"
-            return {"messages": [response]}
+            return {"messages": messages_to_remove + [response]}
 
     def should_continue(self, state: AgentState) -> str:
         last_message = state["messages"][-1]
@@ -140,8 +148,6 @@ class RAGGraph:
 
     async def run_guardrail(self, state: AgentState) -> dict:
         last_message = state["messages"][-1]
-        
-        # --- FIX: Convert Gemini's List output to simple Text ---
         text_content = last_message.content
         if isinstance(text_content, list):
             extracted = []
@@ -151,9 +157,8 @@ class RAGGraph:
                 elif isinstance(item, str):
                     extracted.append(item)
             text_content = " ".join(extracted)
-            last_message.content = text_content  # Update for FastAPI Response
-        # --------------------------------------------------------
-        
+            last_message.content = text_content
+            
         if not text_content or not text_content.strip():
             return {"messages": []}
             
@@ -177,18 +182,14 @@ class RAGGraph:
         thread_id: str = "default",
         user_id: str | None = None,
     ) -> RAGResponse:
-        """Legacy compatibility method for existing RAG endpoints."""
-        config = {"configurable": {"thread_id": thread_id}}
-        
+        config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
         result = await self.graph.ainvoke(
             {"messages": [HumanMessage(content=query)]},
             config=config
         )
-        
         final_answer = result["messages"][-1].content
         return RAGResponse(answer=final_answer, sources=[])
 
     def get_state(self, thread_id: str):
-        """Legacy compatibility method for tests."""
         config = {"configurable": {"thread_id": thread_id}}
         return self.graph.get_state(config)

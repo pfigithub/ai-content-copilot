@@ -14,8 +14,8 @@ from app.services.document_ingestion_service import DocumentIngestionService
 from app.services.input_service import normalize_content
 from app.services.language_service import detect_language
 from app.services.pdf_service import extract_text_from_pdf
-# 🟢 FIX: Import IngestionGuardrail instead of InputGuardrail
 from app.services.guardrail_service import IngestionGuardrail, SecurityViolationError
+from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
@@ -29,8 +29,10 @@ def get_document_ingestion_service(request: Request) -> DocumentIngestionService
 async def ingest_content_endpoint(
     content_request: ContentRequest,
     ingestion_service: Annotated[DocumentIngestionService, Depends(get_document_ingestion_service)],
+    user_id: str = Depends(get_current_user),
 ) -> DocumentIngestionResponse:
     normalized_content = await normalize_content(content_request)
+    normalized_content.user_id = user_id
 
     if not normalized_content.content.strip():
         raise HTTPException(status_code=422, detail="No extractable content was found.")
@@ -50,6 +52,7 @@ async def ingest_pdf_endpoint(
     file: UploadFile = File(...),
     task: TaskName | None = Form(default=None),
     instruction: str | None = Form(default=None),
+    user_id: str = Depends(get_current_user),
 ) -> DocumentIngestionResponse:
     temp_path: str | None = None
     try:
@@ -85,8 +88,9 @@ async def ingest_pdf_endpoint(
             source_language=detect_language(text),
             pages=pages_data, 
         )
+        normalized_content.user_id = user_id
         
-        # 🟢 FIX: Use IngestionGuardrail
+        # Use IngestionGuardrail
         guardrail = IngestionGuardrail()
         try:
             await guardrail.verify_safe_document(normalized_content.content)

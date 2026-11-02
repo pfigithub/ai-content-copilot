@@ -7,8 +7,12 @@ from mcp.server.fastmcp import FastMCP
 import datetime
 import os
 
-# Create an MCP server named "LocalSystem"
 mcp = FastMCP("LocalSystem")
+
+# 🟢 FIX: Secure Workspace definition (prevents unauthorized access to OS files)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WORKSPACE_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "workspace"))
+os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 @mcp.tool()
 def get_current_time() -> str:
@@ -17,13 +21,21 @@ def get_current_time() -> str:
 
 @mcp.tool()
 def list_directory(path: str = ".") -> str:
-    """List all files and folders in a specific directory on the local system."""
+    """List all files and folders in the designated secure workspace on the local system."""
     try:
-        files = os.listdir(path)
-        return "\n".join(files)
+        target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, path))
+        
+        # 🟢 FIX: Prevent Directory Traversal (SSRF/LFI equivalent for filesystem)
+        if not target_path.startswith(WORKSPACE_DIR):
+            return "Security Error: Access denied. You can only read files inside the designated workspace."
+            
+        if not os.path.exists(target_path):
+            return f"Path does not exist: {path}"
+            
+        files = os.listdir(target_path)
+        return "\n".join(files) if files else "Directory is empty."
     except Exception as e:
         return f"Error reading directory: {e}"
 
 if __name__ == "__main__":
-    # The server communicates via standard input/output (stdio)
     mcp.run(transport='stdio')

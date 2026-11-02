@@ -174,29 +174,21 @@ class QdrantStore:
         query: str,
         k: int = 4,
         score_threshold: float | None = None,
+        user_id: str | None = None,
     ) -> list[tuple[Document, float]]:
-        """Return relevant documents together with their retrieval scores."""
-
         if not query or not query.strip():
-            raise ValueError(
-                "Query cannot be empty."
-            )
-
+            raise ValueError("Query cannot be empty.")
         if k <= 0:
-            raise ValueError(
-                "k must be greater than zero."
-            )
+            raise ValueError("k must be greater than zero.")
+        if score_threshold is not None and not 0 <= score_threshold <= 1:
+            raise ValueError("score_threshold must be between 0 and 1.")
 
-        if (
-            score_threshold is not None
-            and not 0 <= score_threshold <= 1
-        ):
-            raise ValueError(
-                "score_threshold must be between 0 and 1."
+        search_filter = None
+        if user_id:
+            search_filter = Filter(
+                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
             )
 
         return await self._get_store().asimilarity_search_with_score(
-            query,
-            k=k,
-            score_threshold=score_threshold,
+            query, k=k, score_threshold=score_threshold, filter=search_filter
         )
