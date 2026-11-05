@@ -1,5 +1,7 @@
+
 import asyncio
 
+import pytest
 from langchain_core.documents import Document
 
 from app.models.schemas import NormalizedContent
@@ -9,33 +11,37 @@ from app.services.document_ingestion_service import (
 
 
 class FakeStore:
-    """Simulate Qdrant upserts and stale-chunk cleanup in memory."""
+    """Simulate tenant-scoped vector storage and stale-chunk cleanup."""
 
     def __init__(self):
-        """Initialize the in-memory collection."""
-
         self.documents_by_id: dict[str, Document] = {}
 
     @property
     def documents(self) -> list[Document]:
-        """Return the documents currently stored by the fake collection."""
-
         return list(self.documents_by_id.values())
 
     def add_documents(
         self,
         documents: list[Document],
         ids: list[str] | None = None,
+        *,
+        user_id: str,
     ) -> list[str]:
-        """Simulate insertion or replacement using document IDs."""
+        """Reject cross-tenant writes and simulate deterministic upserts."""
+
+        if not user_id:
+            raise ValueError("user_id is required")
 
         if ids is None:
-            ids = [
-                f"fake-document-{index}"
-                for index in range(1, len(documents) + 1)
-            ]
+            raise ValueError("Deterministic IDs are required in this test.")
+
+        if len(ids) != len(documents):
+            raise ValueError("IDs and documents must have matching lengths.")
 
         for document_id, document in zip(ids, documents):
+            if document.metadata.get("user_id") != user_id:
+                raise ValueError("Tenant mismatch.")
+
             self.documents_by_id[document_id] = document
 
         return list(ids)
@@ -44,14 +50,17 @@ class FakeStore:
         self,
         source_id: str,
         last_chunk_index: int,
+        *,
+        user_id: str,
     ) -> None:
-        """Remove trailing chunks belonging to the specified source."""
+        """Remove trailing chunks only for the specified tenant and source."""
 
         obsolete_ids = [
             document_id
             for document_id, document in self.documents_by_id.items()
             if (
-                document.metadata.get("source_id") == source_id
+                document.metadata.get("user_id") == user_id
+                and document.metadata.get("source_id") == source_id
                 and document.metadata.get("chunk_index", 0)
                 > last_chunk_index
             )
@@ -61,25 +70,34 @@ class FakeStore:
             del self.documents_by_id[document_id]
 
 
+def make_content(
+    user_id: str | None = "tenant-a",
+    source: str = "water-guide.txt",
+    text: str | None = None,
+) -> NormalizedContent:
+    """Build a consistent test document for the selected tenant."""
+
+    return NormalizedContent(
+        content=text or (
+            "Water management and efficient irrigation improve "
+            "agricultural water use. "
+        ) * 20,
+        source_type="text",
+        source=source,
+        source_language="en",
+        user_id=user_id,
+    )
+
+
 def test_ingestion_splits_and_stores_documents():
-    """Verify chunk creation, metadata preservation, and stable IDs."""
+    """Verify chunk metadata and deterministic document IDs."""
 
     store = FakeStore()
     service = DocumentIngestionService(store=store)
 
-    content = NormalizedContent(
-        content=(
-            "آبیاری قطره‌ای می‌تواند مصرف آب را کاهش دهد. "
-            "مدیریت صحیح منابع آب به افزایش بهره‌وری کمک می‌کند. "
-        ) * 20,
-        source_type="text",
-        source="agriculture-guide.txt",
-        source_language="fa",
-    )
-
     result = asyncio.run(
         service.ingest(
-            content=content,
+            make_content(),
             chunk_size=80,
             chunk_overlap=10,
         )
@@ -87,45 +105,28 @@ def test_ingestion_splits_and_stores_documents():
 
     assert result.chunks_created > 1
     assert result.chunks_created == len(store.documents)
-    assert result.source == "agriculture-guide.txt"
+    assert result.source == "water-guide.txt"
     assert result.source_type == "text"
     assert len(result.document_ids) == len(store.documents)
+    assert len(set(result.document_ids)) == len(result.document_ids)
 
-    assert len(set(result.document_ids)) == len(
-        result.document_ids
-    )
-
-    for index, document in enumerate(
-        store.documents,
-        start=1,
-    ):
-        assert document.metadata["source"] == (
-            "agriculture-guide.txt"
-        )
-
+    for index, document in enumerate(store.documents, start=1):
+        assert document.metadata["source"] == "water-guide.txt"
         assert document.metadata["source_type"] == "text"
+        assert document.metadata["user_id"] == "tenant-a"
         assert document.metadata["source_id"]
         assert document.metadata["chunk_index"] == index
-        assert document.metadata["chunk_count"] == (
-            result.chunks_created
-        )
+        assert document.metadata["chunk_count"] == result.chunks_created
 
 
-def test_reingestion_does_not_duplicate_identical_source():
-    """Verify repeating an ingestion reuses existing document IDs."""
+def test_reingestion_reuses_ids_for_same_tenant_and_source():
+    """Repeated ingestion of one source must upsert rather than duplicate."""
 
     store = FakeStore()
     service = DocumentIngestionService(store=store)
+    content = make_content()
 
-    content = NormalizedContent(
-        content=(
-            "آبیاری قطره‌ای می‌تواند مصرف آب را کاهش دهد. "
-        ) * 10,
-        source_type="text",
-        source="agriculture-guide.txt",
-    )
-
-    first_result = asyncio.run(
+    first = asyncio.run(
         service.ingest(
             content,
             chunk_size=80,
@@ -133,9 +134,7 @@ def test_reingestion_does_not_duplicate_identical_source():
         )
     )
 
-    first_ids = list(first_result.document_ids)
-
-    second_result = asyncio.run(
+    second = asyncio.run(
         service.ingest(
             content,
             chunk_size=80,
@@ -143,57 +142,141 @@ def test_reingestion_does_not_duplicate_identical_source():
         )
     )
 
-    assert second_result.document_ids == first_ids
-    assert len(store.documents) == len(first_ids)
+    assert second.document_ids == first.document_ids
+    assert len(store.documents) == len(first.document_ids)
 
 
-def test_reingestion_removes_obsolete_trailing_chunks():
-    """Verify shorter replacement content removes old trailing chunks."""
+def test_same_source_name_is_isolated_between_tenants():
+    """Identical source names must produce distinct tenant-scoped IDs."""
 
     store = FakeStore()
     service = DocumentIngestionService(store=store)
 
-    original_content = NormalizedContent(
-        content=(
-            "این یک راهنمای طولانی درباره مدیریت آب است. "
+    tenant_a = make_content(user_id="tenant-a")
+    tenant_b = make_content(user_id="tenant-b")
+
+    result_a = asyncio.run(
+        service.ingest(
+            tenant_a,
+            chunk_size=80,
+            chunk_overlap=10,
+        )
+    )
+
+    result_b = asyncio.run(
+        service.ingest(
+            tenant_b,
+            chunk_size=80,
+            chunk_overlap=10,
+        )
+    )
+
+    assert set(result_a.document_ids).isdisjoint(
+        set(result_b.document_ids)
+    )
+
+    assert len(store.documents) == (
+        result_a.chunks_created + result_b.chunks_created
+    )
+
+    owners = {
+        document.metadata["user_id"]
+        for document in store.documents
+    }
+
+    assert owners == {"tenant-a", "tenant-b"}
+
+
+def test_shorter_reingestion_removes_only_its_own_trailing_chunks():
+    """Replacing one tenant's source must not delete another tenant's data."""
+
+    store = FakeStore()
+    service = DocumentIngestionService(store=store)
+
+    original_a = make_content(
+        user_id="tenant-a",
+        text=(
+            "Long document about water management and irrigation. "
         ) * 20,
-        source_type="text",
-        source="water-guide.txt",
     )
 
-    original_result = asyncio.run(
+    original_b = make_content(
+        user_id="tenant-b",
+        text=(
+            "Long document about water management and irrigation. "
+        ) * 20,
+    )
+
+    result_a = asyncio.run(
         service.ingest(
-            original_content,
+            original_a,
             chunk_size=80,
             chunk_overlap=10,
         )
     )
 
-    assert original_result.chunks_created > 1
-
-    updated_content = NormalizedContent(
-        content="نسخه کوتاه‌شده راهنمای مدیریت آب.",
-        source_type="text",
-        source="water-guide.txt",
-    )
-
-    updated_result = asyncio.run(
+    result_b = asyncio.run(
         service.ingest(
-            updated_content,
+            original_b,
             chunk_size=80,
             chunk_overlap=10,
         )
     )
 
-    assert updated_result.chunks_created == 1
-    assert len(store.documents) == 1
-    assert store.documents[0].page_content == (
-        "نسخه کوتاه‌شده راهنمای مدیریت آب."
+    assert result_a.chunks_created > 1
+    assert result_b.chunks_created > 1
+
+    shortened_a = make_content(
+        user_id="tenant-a",
+        text="Short replacement document.",
     )
+
+    replacement = asyncio.run(
+        service.ingest(
+            shortened_a,
+            chunk_size=80,
+            chunk_overlap=10,
+        )
+    )
+
+    tenant_a_documents = [
+        document
+        for document in store.documents
+        if document.metadata["user_id"] == "tenant-a"
+    ]
+
+    tenant_b_documents = [
+        document
+        for document in store.documents
+        if document.metadata["user_id"] == "tenant-b"
+    ]
+
+    assert replacement.chunks_created == 1
+    assert len(tenant_a_documents) == 1
+    assert len(tenant_b_documents) == result_b.chunks_created
+
+
+def test_ingestion_rejects_missing_user_id():
+    """Never store documents under a shared fallback tenant."""
+
+    store = FakeStore()
+    service = DocumentIngestionService(store=store)
+
+    with pytest.raises(
+        ValueError,
+        match="user_id is required",
+    ):
+        asyncio.run(
+            service.ingest(
+                make_content(user_id=None)
+            )
+        )
+
+    assert store.documents == []
 
 
 def test_ingestion_rejects_empty_content():
-    """Verify blank content is rejected before storage is touched."""
+    """Reject blank content before storage is touched."""
 
     store = FakeStore()
     service = DocumentIngestionService(store=store)
@@ -201,14 +284,15 @@ def test_ingestion_rejects_empty_content():
     content = NormalizedContent(
         content="   ",
         source_type="text",
+        user_id="tenant-a",
     )
 
-    try:
-        asyncio.run(service.ingest(content))
-        raise AssertionError(
-            "Expected empty content to be rejected."
+    with pytest.raises(
+        ValueError,
+        match="Content cannot be empty",
+    ):
+        asyncio.run(
+            service.ingest(content)
         )
-    except ValueError as exc:
-        assert "Content cannot be empty" in str(exc)
 
     assert store.documents == []

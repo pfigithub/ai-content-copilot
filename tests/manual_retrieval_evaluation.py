@@ -222,15 +222,19 @@ def build_documents() -> list[Document]:
     documents: list[Document] = []
 
     for item in DATASET:
-        documents.extend(
-            split_document(
-                text=item["text"],
-                source=item["source"],
-                source_type="evaluation",
-                chunk_size=500,
-                chunk_overlap=50,
-            )
+        chunks = split_document(
+            text=item["text"],
+            source=item["source"],
+            source_type="evaluation",
+            chunk_size=500,
+            chunk_overlap=50,
         )
+
+        for chunk in chunks:
+            chunk.metadata["user_id"] = "evaluation"
+            chunk.metadata["source_id"] = (
+                f"retrieval-evaluation:{item['source']}"
+            )
 
     return documents
 
@@ -397,7 +401,10 @@ async def main() -> None:
         )
 
     documents = build_documents()
-    inserted_ids = store.add_documents(documents)
+    inserted_ids = store.add_documents(
+        documents,
+        user_id="evaluation",
+    )
 
     print("EVALUATION DATASET")
     print("documents:", len(documents))
@@ -418,6 +425,7 @@ async def main() -> None:
         results = await store.similarity_search_with_score(
             query=case["query"],
             k=MAX_RETRIEVAL_K,
+            user_id="evaluation",
         )
 
         expected_source = case["expected_source"]
@@ -487,6 +495,7 @@ async def main() -> None:
         results = await store.similarity_search_with_score(
             query=query,
             k=MAX_RETRIEVAL_K,
+            user_id="evaluation",
         )
 
         nearest_source = (

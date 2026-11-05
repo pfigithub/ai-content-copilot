@@ -1,3 +1,4 @@
+
 from uuid import uuid4
 
 from langchain_core.documents import Document
@@ -11,23 +12,16 @@ from qdrant_client.models import (
 )
 
 from app.config import settings
-from app.retrieval.ollama_embedding_provider import (
-    OllamaEmbeddingProvider,
-)
+from app.retrieval.ollama_embedding_provider import OllamaEmbeddingProvider
 
 
 class QdrantStore:
-    """Manage document insertion, retrieval, and source-specific cleanup in Qdrant."""
+    """Provide tenant-scoped document storage and retrieval in Qdrant."""
 
-    def __init__(
-        self,
-        collection_name: str | None = None,
-    ):
+    def __init__(self, collection_name: str | None = None):
         """Initialize the Qdrant client and embedding provider."""
 
-        self.client = QdrantClient(
-            url=settings.qdrant_url,
-        )
+        self.client = QdrantClient(url=settings.qdrant_url)
 
         embedding_provider = OllamaEmbeddingProvider()
         self.embeddings = embedding_provider.embeddings
@@ -40,8 +34,19 @@ class QdrantStore:
 
         self.store: QdrantVectorStore | None = None
 
+    @staticmethod
+    def _validate_user_id(user_id: str | None) -> str:
+        """Reject missing or malformed tenant identifiers."""
+
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError(
+                "Security Error: a valid user_id is required."
+            )
+
+        return user_id.strip()
+
     def _get_store(self) -> QdrantVectorStore:
-        """Return the vector store, connecting to an existing collection when needed."""
+        """Create the vector-store adapter lazily."""
 
         if self.store is None:
             self.store = QdrantVectorStore.from_existing_collection(
@@ -56,16 +61,40 @@ class QdrantStore:
         self,
         documents: list[Document],
         ids: list[str] | None = None,
+        *,
+        user_id: str,
     ) -> list[str]:
-        """Insert documents using supplied IDs or generate new random IDs."""
+        """Store documents only when every document belongs to the tenant."""
+
+        tenant_id = self._validate_user_id(user_id)
 
         if not documents:
             if ids:
                 raise ValueError(
                     "IDs cannot be supplied when documents are empty."
                 )
-
             return []
+
+        for index, document in enumerate(documents):
+            metadata = document.metadata
+
+            if metadata.get("user_id") != tenant_id:
+                raise ValueError(
+                    f"Document at index {index} does not belong to "
+                    "the authenticated tenant."
+                )
+
+            source_id = metadata.get("source_id")
+            if not isinstance(source_id, str) or not source_id.strip():
+                raise ValueError(
+                    f"Document at index {index} is missing source_id metadata."
+                )
+
+            chunk_index = metadata.get("chunk_index")
+            if not isinstance(chunk_index, int) or chunk_index < 1:
+                raise ValueError(
+                    f"Document at index {index} has an invalid chunk_index."
+                )
 
         if ids is None:
             document_ids = [
@@ -78,7 +107,10 @@ class QdrantStore:
                     "The number of IDs must match the number of documents."
                 )
 
-            if any(not document_id.strip() for document_id in ids):
+            if any(
+                not isinstance(document_id, str) or not document_id.strip()
+                for document_id in ids
+            ):
                 raise ValueError(
                     "Document IDs cannot be empty."
                 )
@@ -90,8 +122,6 @@ class QdrantStore:
 
             document_ids = list(ids)
 
-        # Explicit IDs allow repeated ingestion to update existing points
-        # instead of creating new points for the same source and chunk.
         self.store = QdrantVectorStore.from_documents(
             documents=documents,
             embedding=self.embeddings,
@@ -106,13 +136,15 @@ class QdrantStore:
         self,
         source_id: str,
         last_chunk_index: int,
+        *,
+        user_id: str,
     ) -> None:
-        """Delete obsolete trailing chunks after a source is re-ingested."""
+        """Delete obsolete chunks only within the owning tenant."""
 
-        if not source_id or not source_id.strip():
-            raise ValueError(
-                "Source ID cannot be empty."
-            )
+        tenant_id = self._validate_user_id(user_id)
+
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError("Source ID cannot be empty.")
 
         if last_chunk_index < 0:
             raise ValueError(
@@ -120,53 +152,29 @@ class QdrantStore:
             )
 
         if not self.client.collection_exists(
-            collection_name=self.collection_name,
+            collection_name=self.collection_name
         ):
             return
 
-        # LangChain stores document metadata under the Qdrant "metadata"
-        # payload key by default, so these filters target that nested data.
         self.client.delete(
             collection_name=self.collection_name,
             points_selector=Filter(
                 must=[
                     FieldCondition(
+                        key="metadata.user_id",
+                        match=MatchValue(value=tenant_id),
+                    ),
+                    FieldCondition(
                         key="metadata.source_id",
-                        match=MatchValue(
-                            value=source_id,
-                        ),
+                        match=MatchValue(value=source_id),
                     ),
                     FieldCondition(
                         key="metadata.chunk_index",
-                        range=Range(
-                            gt=last_chunk_index,
-                        ),
+                        range=Range(gt=last_chunk_index),
                     ),
                 ],
             ),
             wait=True,
-        )
-
-    def similarity_search(
-        self,
-        query: str,
-        k: int = 4,
-    ) -> list[Document]:
-        """Return the documents most similar to a query."""
-
-        if not query or not query.strip():
-            raise ValueError(
-                "Query cannot be empty."
-            )
-
-        if k <= 0:
-            raise ValueError(
-                "k must be greater than zero."
-            )
-
-        return self._get_store().similarity_search(
-            query,
-            k=k,
         )
 
     async def similarity_search_with_score(
@@ -176,19 +184,38 @@ class QdrantStore:
         score_threshold: float | None = None,
         user_id: str | None = None,
     ) -> list[tuple[Document, float]]:
+        """Retrieve only documents owned by the authenticated tenant."""
+
+        tenant_id = self._validate_user_id(user_id)
+
         if not query or not query.strip():
             raise ValueError("Query cannot be empty.")
-        if k <= 0:
-            raise ValueError("k must be greater than zero.")
-        if score_threshold is not None and not 0 <= score_threshold <= 1:
-            raise ValueError("score_threshold must be between 0 and 1.")
 
-        search_filter = None
-        if user_id:
-            search_filter = Filter(
-                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+        if k <= 0:
+            raise ValueError(
+                "k must be greater than zero."
             )
 
+        if (
+            score_threshold is not None
+            and not 0 <= score_threshold <= 1
+        ):
+            raise ValueError(
+                "score_threshold must be between 0 and 1."
+            )
+
+        search_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.user_id",
+                    match=MatchValue(value=tenant_id),
+                )
+            ]
+        )
+
         return await self._get_store().asimilarity_search_with_score(
-            query, k=k, score_threshold=score_threshold, filter=search_filter
+            query,
+            k=k,
+            score_threshold=score_threshold,
+            filter=search_filter,
         )

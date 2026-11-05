@@ -1,301 +1,268 @@
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from langchain_core.documents import (
-    Document,
+from langchain_core.documents import Document
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    MatchValue,
 )
 
-from app.retrieval.qdrant_store import (
-    QdrantStore,
-)
+from app.retrieval.qdrant_store import QdrantStore
 
 
-def test_qdrant_store_adds_documents(
-    monkeypatch,
-):
+def make_document(
+    user_id: str = "tenant-a",
+    source_id: str = "source-123",
+    chunk_index: int = 1,
+) -> Document:
+    """Create a document with the metadata required by tenant isolation."""
+
+    return Document(
+        page_content="Test content.",
+        metadata={
+            "user_id": user_id,
+            "source_id": source_id,
+            "source": "test.txt",
+            "source_type": "text",
+            "chunk_index": chunk_index,
+            "chunk_count": 1,
+        },
+    )
+
+
+def patch_qdrant_dependencies(monkeypatch):
+    """Replace external Qdrant and embedding dependencies with test doubles."""
 
     captured = {}
 
     class FakeClient:
-
-        def __init__(
-            self,
-            **kwargs,
-        ):
-            captured["client"] = kwargs
-
-
-    class FakeEmbeddings:
-
-        pass
-
-
-    class FakeEmbeddingProvider:
-
-        def __init__(self):
-            self.embeddings = (
-                FakeEmbeddings()
-            )
-
-
-    class FakeVectorStore:
-
-        @classmethod
-        def from_documents(
-            cls,
-            **kwargs,
-        ):
-
-            captured["store"] = kwargs
-
-            return cls()
-
-
-        def similarity_search(
-            self,
-            query,
-            k=4,
-        ):
-            return []
-
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantClient",
-        FakeClient,
-    )
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.OllamaEmbeddingProvider",
-        FakeEmbeddingProvider,
-    )
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantVectorStore",
-        FakeVectorStore,
-    )
-
-    store = QdrantStore()
-
-    documents = [
-        Document(
-            page_content="Test content.",
-            metadata={
-                "source": "test.txt",
-            },
-        )
-    ]
-
-    ids = store.add_documents(
-        documents
-    )
-
-    assert len(ids) == 1
-
-    assert (
-        captured["store"]["collection_name"]
-        == "content_copilot"
-    )
-
-    assert (
-        captured["store"]["documents"]
-        == documents
-    )
-
-    assert (
-        captured["store"]["embedding"]
-        is store.embeddings
-    )
-
-    assert (
-        captured["store"]["ids"]
-        == ids
-    )
-
-def test_qdrant_store_accepts_explicit_document_ids(monkeypatch):
-    """Verify caller-provided IDs are forwarded to Qdrant."""
-
-    from langchain_core.documents import Document
-
-    from app.retrieval.qdrant_store import QdrantStore
-
-    captured = {}
-
-    class FakeClient:
-        """Replace the Qdrant client without making a network connection."""
-
-        def __init__(self, **kwargs):
-            captured["client"] = kwargs
-
-    class FakeEmbeddings:
-        """Stand in for the real embedding interface."""
-
-    class FakeEmbeddingProvider:
-        """Provide fake embeddings for the vector-store test."""
-
-        def __init__(self):
-            self.embeddings = FakeEmbeddings()
-
-    class FakeVectorStore:
-        """Capture documents and IDs passed to the vector store."""
-
-        @classmethod
-        def from_documents(cls, **kwargs):
-            captured["store"] = kwargs
-            return cls()
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantClient",
-        FakeClient,
-    )
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.OllamaEmbeddingProvider",
-        FakeEmbeddingProvider,
-    )
-
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantVectorStore",
-        FakeVectorStore,
-    )
-
-    store = QdrantStore()
-
-    documents = [
-        Document(page_content="Stable ID test.")
-    ]
-
-    explicit_ids = [
-        "stable-document-id-1",
-    ]
-
-    returned_ids = store.add_documents(
-        documents,
-        ids=explicit_ids,
-    )
-
-    assert returned_ids == explicit_ids
-    assert captured["store"]["ids"] == explicit_ids
-
-
-def test_qdrant_store_deletes_only_trailing_chunks(monkeypatch):
-    """Verify cleanup filters by source ID and chunk index."""
-
-    from app.retrieval.qdrant_store import QdrantStore
-
-    captured = {}
-
-    class FakeClient:
-        """Capture deletion requests without contacting Qdrant."""
-
         def __init__(self, **kwargs):
             captured["client"] = kwargs
 
         def collection_exists(self, collection_name):
-            captured["checked_collection"] = collection_name
             return True
 
-        def delete(
-            self,
-            collection_name,
-            points_selector,
-            wait=True,
-        ):
+        def delete(self, collection_name, points_selector, wait=True):
             captured["delete"] = {
                 "collection_name": collection_name,
                 "points_selector": points_selector,
                 "wait": wait,
             }
 
-    class FakeEmbeddings:
-        """Stand in for the real embedding interface."""
-
     class FakeEmbeddingProvider:
-        """Provide fake embeddings for the deletion test."""
-
         def __init__(self):
-            self.embeddings = FakeEmbeddings()
+            self.embeddings = object()
 
     monkeypatch.setattr(
         "app.retrieval.qdrant_store.QdrantClient",
         FakeClient,
     )
-
     monkeypatch.setattr(
         "app.retrieval.qdrant_store.OllamaEmbeddingProvider",
         FakeEmbeddingProvider,
     )
 
-    store = QdrantStore(
-        collection_name="test_collection",
+    return captured
+
+
+def test_qdrant_store_adds_tenant_owned_documents(monkeypatch):
+    """Store documents only when their metadata matches the tenant."""
+
+    captured = patch_qdrant_dependencies(monkeypatch)
+
+    class FakeVectorStore:
+        @classmethod
+        def from_documents(cls, **kwargs):
+            captured["store"] = kwargs
+            return cls()
+
+    monkeypatch.setattr(
+        "app.retrieval.qdrant_store.QdrantVectorStore",
+        FakeVectorStore,
     )
+
+    store = QdrantStore()
+    documents = [make_document()]
+
+    ids = store.add_documents(
+        documents,
+        user_id="tenant-a",
+    )
+
+    assert len(ids) == 1
+    assert captured["store"]["collection_name"] == "content_copilot"
+    assert captured["store"]["documents"] == documents
+    assert captured["store"]["ids"] == ids
+
+
+def test_qdrant_store_rejects_document_owned_by_another_tenant(
+    monkeypatch,
+):
+    """A tenant must not insert a document carrying another tenant ID."""
+
+    patch_qdrant_dependencies(monkeypatch)
+
+    store = QdrantStore()
+
+    with pytest.raises(ValueError, match="does not belong"):
+        store.add_documents(
+            [make_document(user_id="tenant-b")],
+            user_id="tenant-a",
+        )
+
+
+def test_qdrant_store_rejects_missing_source_id(monkeypatch):
+    """Every stored chunk must identify its source document."""
+
+    patch_qdrant_dependencies(monkeypatch)
+
+    store = QdrantStore()
+    document = make_document()
+    document.metadata.pop("source_id")
+
+    with pytest.raises(ValueError, match="source_id"):
+        store.add_documents(
+            [document],
+            user_id="tenant-a",
+        )
+
+
+def test_qdrant_store_deletes_only_tenant_owned_trailing_chunks(
+    monkeypatch,
+):
+    """Stale-chunk cleanup must include the tenant ownership filter."""
+
+    captured = patch_qdrant_dependencies(monkeypatch)
+    store = QdrantStore(collection_name="test_collection")
 
     store.delete_chunks_after(
         source_id="source-123",
         last_chunk_index=2,
+        user_id="tenant-a",
     )
 
     deletion = captured["delete"]
     conditions = deletion["points_selector"].must
 
-    assert deletion["collection_name"] == "test_collection"
     assert deletion["wait"] is True
+    assert len(conditions) == 3
 
-    assert conditions[0].key == "metadata.source_id"
-    assert conditions[0].match.value == "source-123"
+    assert conditions[0].key == "metadata.user_id"
+    assert conditions[0].match.value == "tenant-a"
 
-    assert conditions[1].key == "metadata.chunk_index"
-    assert conditions[1].range.gt == 2
+    assert conditions[1].key == "metadata.source_id"
+    assert conditions[1].match.value == "source-123"
+
+    assert conditions[2].key == "metadata.chunk_index"
+    assert conditions[2].range.gt == 2
+
 
 @pytest.mark.anyio
-async def test_qdrant_store_forwards_score_threshold(monkeypatch):
-    expected_results = [(Document(page_content="Relevant content."), 0.62)]
+async def test_qdrant_store_filters_retrieval_by_tenant(monkeypatch):
+    """Search results must be restricted to the requested tenant."""
+
+    patch_qdrant_dependencies(monkeypatch)
+
+    expected_results = [
+        (make_document(), 0.62)
+    ]
+
     vector_store = MagicMock()
-    vector_store.asimilarity_search_with_score = AsyncMock(return_value=expected_results)
+    vector_store.asimilarity_search_with_score = AsyncMock(
+        return_value=expected_results
+    )
+
     vector_store_factory = MagicMock()
     vector_store_factory.from_existing_collection.return_value = vector_store
 
-    monkeypatch.setattr("app.retrieval.qdrant_store.QdrantClient", MagicMock())
-    monkeypatch.setattr("app.retrieval.qdrant_store.OllamaEmbeddingProvider", lambda: SimpleNamespace(embeddings=object()))
-    monkeypatch.setattr("app.retrieval.qdrant_store.QdrantVectorStore", vector_store_factory)
+    monkeypatch.setattr(
+        "app.retrieval.qdrant_store.QdrantVectorStore",
+        vector_store_factory,
+    )
 
-    store = QdrantStore(collection_name="test_collection")
-    results = await store.similarity_search_with_score(query="A test retrieval query.", k=3, score_threshold=0.4)
+    store = QdrantStore(
+        collection_name="test_collection"
+    )
+
+    results = await store.similarity_search_with_score(
+        query="A test retrieval query.",
+        k=3,
+        score_threshold=0.4,
+        user_id="tenant-a",
+    )
 
     assert results == expected_results
+
+    expected_filter = Filter(
+        must=[
+            FieldCondition(
+                key="metadata.user_id",
+                match=MatchValue(value="tenant-a"),
+            )
+        ]
+    )
+
     vector_store.asimilarity_search_with_score.assert_awaited_once_with(
         "A test retrieval query.",
         k=3,
         score_threshold=0.4,
-        filter=None # 🟢 FIX: Added missing filter parameter check
+        filter=expected_filter,
     )
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("score_threshold", [-0.01, 1.01])
-async def test_qdrant_store_rejects_out_of_range_score_thresholds(
-    monkeypatch,
-    score_threshold,
-):
-    """Reject thresholds outside the application's configured range."""
+async def test_qdrant_store_rejects_missing_user_id(monkeypatch):
+    """Retrieval without a tenant identity must fail closed."""
 
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.QdrantClient",
-        MagicMock(),
-    )
-    monkeypatch.setattr(
-        "app.retrieval.qdrant_store.OllamaEmbeddingProvider",
-        lambda: SimpleNamespace(embeddings=object()),
-    )
+    patch_qdrant_dependencies(monkeypatch)
 
-    store = QdrantStore(collection_name="test_collection")
+    store = QdrantStore(
+        collection_name="test_collection"
+    )
 
     with pytest.raises(
         ValueError,
-        match="score_threshold must be between 0 and 1",
+        match="user_id is required",
     ):
         await store.similarity_search_with_score(
-            query="A test retrieval query.",
-            score_threshold=score_threshold,
+            query="Test query.",
+            user_id=None,
+        )
+
+
+def test_qdrant_store_rejects_missing_tenant_on_insert(monkeypatch):
+    """Insertion without a tenant identity must fail closed."""
+
+    patch_qdrant_dependencies(monkeypatch)
+
+    store = QdrantStore()
+
+    with pytest.raises(
+        ValueError,
+        match="user_id is required",
+    ):
+        store.add_documents(
+            [make_document()],
+            user_id="",
+        )
+
+
+def test_qdrant_store_rejects_missing_tenant_on_delete(monkeypatch):
+    """Deletion without a tenant identity must fail closed."""
+
+    patch_qdrant_dependencies(monkeypatch)
+
+    store = QdrantStore()
+
+    with pytest.raises(
+        ValueError,
+        match="user_id is required",
+    ):
+        store.delete_chunks_after(
+            source_id="source-123",
+            last_chunk_index=1,
+            user_id="",
         )

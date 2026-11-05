@@ -2,9 +2,12 @@ import logging
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_community.tools import DuckDuckGoSearchRun
+
 from app.retrieval.retriever import ContentRetriever
 from app.rag.evidence_sufficiency import EvidenceSufficiencyEvaluator
 from app.rag.research_query_planner import ResearchQueryPlanner
+from app.rag.query_contextualizer import QueryContextualizer
+from app.rag.rag_chain import RAGChain
 
 logger = logging.getLogger(__name__)
 
@@ -16,56 +19,67 @@ async def search_internal_documents(query: str, config: RunnableConfig) -> str:
     """
     try:
         user_id = config.get("configurable", {}).get("user_id")
+        k = config.get("configurable", {}).get("k", 8)
+        score_threshold = config.get("configurable", {}).get("score_threshold")
+        # History is passed down from the agent state to give Contextualizer the full picture
+        chat_history = config.get("configurable", {}).get("chat_history", [])
+        
         retriever = ContentRetriever()
         evaluator = EvidenceSufficiencyEvaluator()
         planner = ResearchQueryPlanner()
+        contextualizer = QueryContextualizer()
+        rag_chain = RAGChain(retriever=retriever)
         
-        # 1. Initial Retrieval
-        results = await retriever.retrieve(query=query, k=8, user_id=user_id)
+        try:
+            standalone_query = await contextualizer.contextualize(question=query, history=chat_history)
+        except Exception as e:
+            logger.warning(f"Contextualization failed: {e}. Using raw query.")
+            standalone_query = query
+            
+        results = await retriever.retrieve(query=standalone_query, k=k, score_threshold=score_threshold, user_id=user_id)
         
         if not results:
             return "No relevant information found in the internal database."
             
-        # 2. Self-Reflective Evaluation
         try:
-            assessment = await evaluator.evaluate(question=query, results=results)
+            assessment = await evaluator.evaluate(question=standalone_query, results=results)
+            
             if not assessment.sufficient:
-                logger.info(f"Evidence insufficient. Planning alternative...")
-                alt_query = await planner.create_alternative_query(question=query, attempted_query=query)
+                logger.info("Evidence insufficient. Planning alternative query...")
+                alt_query = await planner.create_alternative_query(question=standalone_query, attempted_query=standalone_query)
                 
-                if alt_query and alt_query.strip().casefold() != query.strip().casefold():
-                    alt_results = await retriever.retrieve(query=alt_query, k=8, user_id=user_id)
+                if alt_query and alt_query.strip().casefold() != standalone_query.strip().casefold():
+                    alt_results = await retriever.retrieve(query=alt_query, k=k, score_threshold=score_threshold, user_id=user_id)
                     
-                    # Merge results (avoiding duplicates by source and chunk_index)
-                    seen = {(d.metadata.get("source"), d.metadata.get("chunk_index")) for d, _ in results}
-                    for doc, score in alt_results:
-                        key = (doc.metadata.get("source"), doc.metadata.get("chunk_index"))
-                        if key not in seen:
-                            results.append((doc, score))
-                            seen.add(key)
+                    if alt_results:
+                        alt_assessment = await evaluator.evaluate(question=standalone_query, results=alt_results)
+                        if alt_assessment.sufficient:
+                            results = alt_results
+                        else:
+                            return "Insufficient evidence found in the documents to definitively answer this question."
+                    else:
+                        return "Insufficient evidence found in the documents to definitively answer this question."
+                else:
+                    return "Insufficient evidence found in the documents to definitively answer this question."
+                    
         except Exception as e:
-            logger.warning(f"Advanced RAG evaluation skipped due to error: {e}")
+            logger.error(f"RAG Evaluator/Planner failed: {e}. Failing closed to prevent hallucination.")
+            return "Unable to answer due to an internal evidence evaluation error."
             
-        # 4. Format and Return Final Context
-        context_parts = []
-        for index, (document, _) in enumerate(results, start=1):
-            source = document.metadata.get("source", "unknown")
-            source_type = document.metadata.get("source_type", "unknown")
+        # user_id is now explicitly passed to the RAGChain to enforce tenant isolation down the line
+        final_rag_response = await rag_chain.answer_from_results(query=standalone_query, results=results, history=chat_history)
+        
+        formatted_response = f"{final_rag_response.answer}\n\nSources Used:\n"
+        for src in final_rag_response.sources:
+            # Fixing the chunk_index vs page confusion
+            page_info = f", Page {int(src.chunk_index) if getattr(src, 'chunk_index', None) is not None else 'unknown'}"
+            formatted_response += f"- {src.source} (Score: {src.score:.2f}{page_info})\n"
             
-            page_meta = document.metadata.get("page")
-            page_num = str(int(page_meta) + 1) if isinstance(page_meta, (int, float)) or (isinstance(page_meta, str) and page_meta.isdigit()) else "unknown"
-            
-            context_parts.append(
-                f"<document index=\"{index}\" source=\"{source}\" type=\"{source_type}\" page=\"{page_num}\">\n"
-                f"{document.page_content}\n"
-                f"</document>"
-            )
-            
-        return "\n\n".join(context_parts)
+        return formatted_response
         
     except Exception as e:
-        logger.error(f"Internal search error: {e}")
-        return "The internal database is currently empty or unavailable. Tell the user you don't have internal documents right now."
+        logger.error(f"Internal search critical error: {e}")
+        return "The internal database is currently empty or unavailable."
 
 @tool
 def search_web(query: str) -> str:

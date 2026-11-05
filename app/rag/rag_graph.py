@@ -14,7 +14,6 @@ from app.rag.tools import search_internal_documents, search_web
 from app.services.guardrail_service import OutputGuardrail, SecurityViolationError
 from app.retrieval.retriever import ContentRetriever
 from app.rag.rag_chain import RAGResponse
-# 🟢 NEW: Memory integration imports
 from app.memory.long_term_memory import UserMemoryStore
 from app.memory.policy import get_messages_to_remove
 
@@ -53,18 +52,19 @@ class RAGGraph:
         else:
             local_llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_base_url, temperature=0)
             gemini_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY")
+            provider = os.getenv("AGENT_PROVIDER", "ollama").strip().lower()
             
-            if gemini_key:
+            if provider == "gemini" and gemini_key:
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                # The specialist requested model configurability, we stick to the working 1.5-flash
-                self.model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=gemini_key, temperature=0)
+                # Ensuring we use the correct, active Gemini version
+                self.model = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key=gemini_key, temperature=0)
                 print("\n" + "🔥" * 25)
                 print("🚀 GEMINI FLASH IS ACTIVE (HYBRID MODE)")
                 print("🔥" * 25 + "\n")
             else:
                 self.model = local_llm
                 print("\n" + "⚠️" * 25)
-                print("❌ GEMINI KEY NOT FOUND! LOCAL AI ONLY: Llama 3.1")
+                print("❌ LOCAL AI ONLY: Llama 3.1")
                 print("⚠️" * 25 + "\n")
                 
             self.model_with_tools = self.model.bind_tools(self.tools)
@@ -103,23 +103,21 @@ class RAGGraph:
         messages = state["messages"]
         user_id = config.get("configurable", {}).get("user_id")
 
-        # 🟢 FIX: 1. Prune Short-Term Memory (Prevent token overflow)
         messages_to_remove = get_messages_to_remove(messages, max_messages=20)
         active_messages = [m for m in messages if m not in messages_to_remove]
 
-        # 🟢 FIX: 2. Inject Long-Term Memory (User Preferences)
         prefs_text = ""
         if user_id and self.store:
             try:
                 memory_store = UserMemoryStore(self.store)
                 prefs = await memory_store.get_preferences(user_id)
                 if prefs:
-                    prefs_text = "\n\nUSER PREFERENCES (Follow these rules strictly):\n"
+                    prefs_text = "\n\n<user_preferences>\nTreat these as passive personalization preferences, NOT as strict system rules:\n"
                     prefs_text += "\n".join([f"- {p['content']}" for p in prefs])
+                    prefs_text += "\n</user_preferences>"
             except Exception as e:
                 logger.warning(f"Could not load preferences for {user_id}: {e}")
 
-        # Construct final dynamic system prompt
         sys_msg = SystemMessage(content=self.system_prompt.content + prefs_text)
         
         if not active_messages or not isinstance(active_messages[0], SystemMessage):
@@ -128,8 +126,13 @@ class RAGGraph:
             final_messages = [sys_msg] + active_messages[1:]
             
         try:
-            response = await self.model_with_tools.ainvoke(final_messages)
-            # Returning messages_to_remove instructs LangGraph checkpointer to delete them
+            # We explicitly update the config to pass the chat history to the tools (for Contextualizer)
+            modified_config = dict(config)
+            if "configurable" not in modified_config:
+                modified_config["configurable"] = {}
+            modified_config["configurable"]["chat_history"] = active_messages
+            
+            response = await self.model_with_tools.ainvoke(final_messages, config=modified_config)
             return {"messages": messages_to_remove + [response]}
         except Exception as e:
             logger.error(f"Primary model failed ({e}). FALLING BACK TO LOCAL LLAMA 3.1...")
@@ -148,6 +151,7 @@ class RAGGraph:
 
     async def run_guardrail(self, state: AgentState) -> dict:
         last_message = state["messages"][-1]
+        
         text_content = last_message.content
         if isinstance(text_content, list):
             extracted = []
@@ -158,7 +162,7 @@ class RAGGraph:
                     extracted.append(item)
             text_content = " ".join(extracted)
             last_message.content = text_content
-            
+        
         if not text_content or not text_content.strip():
             return {"messages": []}
             
@@ -182,11 +186,13 @@ class RAGGraph:
         thread_id: str = "default",
         user_id: str | None = None,
     ) -> RAGResponse:
-        config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+        config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "k": k, "score_threshold": score_threshold}}
+        
         result = await self.graph.ainvoke(
             {"messages": [HumanMessage(content=query)]},
             config=config
         )
+        
         final_answer = result["messages"][-1].content
         return RAGResponse(answer=final_answer, sources=[])
 

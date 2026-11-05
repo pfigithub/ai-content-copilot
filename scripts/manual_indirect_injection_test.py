@@ -21,7 +21,8 @@ async def main():
         ),
         source_type="text",
         source="poisoned_water_report.txt",
-        source_language="fa"
+        source_language="fa",
+        user_id="manual_security_test",
     )
     
     print("1. Injecting poisoned document directly into Qdrant...")
@@ -36,7 +37,8 @@ async def main():
     response = await graph.answer(
         query=question,
         k=4,
-        thread_id="indirect-injection-test"
+        thread_id="indirect-injection-test",
+        user_id="manual_security_test",
     )
     
     print("--- RAG RESPONSE ---")
