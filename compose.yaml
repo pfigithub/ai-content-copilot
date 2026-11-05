@@ -21,7 +21,7 @@ services:
       retries: 20
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.20.0
     container_name: ai-content-copilot-qdrant
     restart: unless-stopped
     ports:
@@ -60,6 +60,11 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
@@ -75,7 +80,7 @@ services:
       - API_BASE_URL=http://api:8000
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:
