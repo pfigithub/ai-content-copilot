@@ -1,4 +1,5 @@
 import logging
+import json
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_community.tools import DuckDuckGoSearchRun
@@ -21,31 +22,34 @@ async def search_internal_documents(query: str, config: RunnableConfig) -> str:
         user_id = config.get("configurable", {}).get("user_id")
         k = config.get("configurable", {}).get("k", 8)
         score_threshold = config.get("configurable", {}).get("score_threshold")
-        # History is passed down from the agent state to give Contextualizer the full picture
         chat_history = config.get("configurable", {}).get("chat_history", [])
         
+        # 1. Instantiate the integrated RAG pipeline components
         retriever = ContentRetriever()
         evaluator = EvidenceSufficiencyEvaluator()
         planner = ResearchQueryPlanner()
         contextualizer = QueryContextualizer()
         rag_chain = RAGChain(retriever=retriever)
         
+        # 2. Contextualize the query based on chat history
         try:
             standalone_query = await contextualizer.contextualize(question=query, history=chat_history)
         except Exception as e:
-            logger.warning(f"Contextualization failed: {e}. Using raw query.")
+            logger.warning(f"Contextualization failed: {e}. Falling back to raw query.")
             standalone_query = query
             
+        # 3. Initial Retrieval (Tenant-isolated)
         results = await retriever.retrieve(query=standalone_query, k=k, score_threshold=score_threshold, user_id=user_id)
         
         if not results:
-            return "No relevant information found in the internal database."
+            return "Insufficient evidence found in the documents to definitively answer this question."
             
+        # 4. Evaluator & Planner Loop
         try:
             assessment = await evaluator.evaluate(question=standalone_query, results=results)
             
             if not assessment.sufficient:
-                logger.info("Evidence insufficient. Planning alternative query...")
+                logger.info("Initial evidence insufficient. Attempting alternative query...")
                 alt_query = await planner.create_alternative_query(question=standalone_query, attempted_query=standalone_query)
                 
                 if alt_query and alt_query.strip().casefold() != standalone_query.strip().casefold():
@@ -54,6 +58,7 @@ async def search_internal_documents(query: str, config: RunnableConfig) -> str:
                     if alt_results:
                         alt_assessment = await evaluator.evaluate(question=standalone_query, results=alt_results)
                         if alt_assessment.sufficient:
+                            # Replace with the better alternative results
                             results = alt_results
                         else:
                             return "Insufficient evidence found in the documents to definitively answer this question."
@@ -61,25 +66,32 @@ async def search_internal_documents(query: str, config: RunnableConfig) -> str:
                         return "Insufficient evidence found in the documents to definitively answer this question."
                 else:
                     return "Insufficient evidence found in the documents to definitively answer this question."
-                    
         except Exception as e:
-            logger.error(f"RAG Evaluator/Planner failed: {e}. Failing closed to prevent hallucination.")
-            return "Unable to answer due to an internal evidence evaluation error."
+            logger.error(f"RAG Evaluator/Planner encountered an error: {e}. Failing closed to prevent hallucination.")
+            return "Unable to verify evidence sufficiency due to an internal evaluation error."
             
-        # user_id is now explicitly passed to the RAGChain to enforce tenant isolation down the line
-        final_rag_response = await rag_chain.answer_from_results(query=standalone_query, results=results, history=chat_history)
+        # 5. Generate Grounded Answer via RAGChain (to get structured sources)
+        final_rag_response = await rag_chain.answer_from_results(
+            query=standalone_query, 
+            results=results, 
+            history=chat_history
+        )
         
-        formatted_response = f"{final_rag_response.answer}\n\nSources Used:\n"
-        for src in final_rag_response.sources:
-            # Fixing the chunk_index vs page confusion
-            page_info = f", Page {int(src.chunk_index) if getattr(src, 'chunk_index', None) is not None else 'unknown'}"
-            formatted_response += f"- {src.source} (Score: {src.score:.2f}{page_info})\n"
+        # 6. Format the output so the Agent sees both the grounded answer and the structured sources
+        # We inject the JSON string of sources so the graph can parse it later if needed.
+        sources_data = [src.model_dump() for src in final_rag_response.sources]
+        sources_json = json.dumps(sources_data, ensure_ascii=False)
+        
+        formatted_response = (
+            f"ANSWER:\n{final_rag_response.answer}\n\n"
+            f"--- INTERNAL SOURCES DATA ---\n{sources_json}"
+        )
             
         return formatted_response
         
     except Exception as e:
         logger.error(f"Internal search critical error: {e}")
-        return "The internal database is currently empty or unavailable."
+        return "The internal database is currently unavailable or an unexpected error occurred."
 
 @tool
 def search_web(query: str) -> str:

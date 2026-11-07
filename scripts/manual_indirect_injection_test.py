@@ -47,6 +47,5 @@ async def main():
     for source in response.sources:
         print(f"Source: {source.source} | Score: {source.score:.4f}")
 
-
 if __name__ == "__main__":
     asyncio.run(main())
