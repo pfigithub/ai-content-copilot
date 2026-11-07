@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -5,25 +6,29 @@ from langgraph.store.base import BaseStore
 
 from app.memory.commands import MemoryCommandService
 from app.memory.long_term_memory import UserMemoryStore
+from app.memory.proposal_repository import MemoryProposalRepository
 from app.memory.proposal_service import MemoryProposalService
 from app.memory.write_policy import MemoryWritePolicy
 
 
 @dataclass
 class MemoryServices:
+    """Hold the memory services and their shared dependencies."""
+
     store: BaseStore
     user_memory_store: UserMemoryStore
     write_policy: MemoryWritePolicy
     command_service: MemoryCommandService
+    proposal_repository: MemoryProposalRepository
     proposal_service: MemoryProposalService
 
 
 def build_memory_services(
     store: BaseStore,
+    proposal_repository: MemoryProposalRepository,
 ) -> MemoryServices:
-    user_memory_store = UserMemoryStore(
-        store=store
-    )
+    """Build memory services using the application's configured stores."""
+    user_memory_store = UserMemoryStore(store=store)
 
     write_policy = MemoryWritePolicy(
         memory_store=user_memory_store
@@ -34,7 +39,8 @@ def build_memory_services(
     )
 
     proposal_service = MemoryProposalService(
-        command_service=command_service
+        command_service=command_service,
+        repository=proposal_repository,
     )
 
     return MemoryServices(
@@ -42,6 +48,7 @@ def build_memory_services(
         user_memory_store=user_memory_store,
         write_policy=write_policy,
         command_service=command_service,
+        proposal_repository=proposal_repository,
         proposal_service=proposal_service,
     )
 
@@ -49,10 +56,12 @@ def build_memory_services(
 def get_memory_proposal_service(
     request: Request,
 ) -> MemoryProposalService:
+    """Return the application-wide memory proposal service."""
     return request.app.state.memory_services.proposal_service
 
 
 def get_user_memory_store(
     request: Request,
 ) -> UserMemoryStore:
+    """Return the application-wide long-term memory store."""
     return request.app.state.memory_services.user_memory_store

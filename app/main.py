@@ -15,18 +15,13 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from psycopg_pool import AsyncConnectionPool
 
 from app.api.v1.endpoints.content import router as content_router
 from app.api.v1.endpoints.memory import router as memory_router
-from app.api.v1.endpoints.ingestion import (
-    router as ingestion_router,
-)
-from app.api.v1.endpoints.rag import (
-    router as rag_router,
-)
-from app.api.v1.endpoints.chat import (
-    router as chat_router,
-)
+from app.api.v1.endpoints.ingestion import router as ingestion_router
+from app.api.v1.endpoints.rag import router as rag_router
+from app.api.v1.endpoints.chat import router as chat_router
 from app.exception_handlers import (
     app_error_handler,
     validation_error_handler,
@@ -34,25 +29,29 @@ from app.exception_handlers import (
 from app.exceptions import AppError
 from app.memory.container import build_memory_services
 from app.memory.postgres_config import get_postgres_uri
+from app.memory.proposal_repository import (
+    InMemoryMemoryProposalRepository,
+    MemoryProposalRepository,
+    PostgresMemoryProposalRepository,
+)
 from app.services.document_ingestion_service import (
     DocumentIngestionService,
 )
 from app.rag.rag_graph import RAGGraph
 from app.rag.research_query_planner import ResearchQueryPlanner
-from app.rag.evidence_sufficiency import (
-    EvidenceSufficiencyEvaluator,
-)
+from app.rag.evidence_sufficiency import EvidenceSufficiencyEvaluator
 
 
 def configure_app_resources(
     application: FastAPI,
     store: BaseStore,
     checkpointer,
+    proposal_repository: MemoryProposalRepository,
 ) -> None:
     """Create and register application-wide service dependencies."""
-
     memory_services = build_memory_services(
-        store=store
+        store=store,
+        proposal_repository=proposal_repository,
     )
 
     application.state.store = store
@@ -70,15 +69,15 @@ def configure_app_resources(
     application.state.rag_graph = rag_graph
 
     # Ingested chunks must go into the same collection used by retrieval.
-    application.state.document_ingestion_service = (
-        DocumentIngestionService(
-            store=rag_graph.retriever.store
-        )
+    application.state.document_ingestion_service = DocumentIngestionService(
+        store=rag_graph.retriever.store
     )
+
 
 def create_app(
     use_in_memory: bool | None = None,
 ) -> FastAPI:
+    """Create the FastAPI application and manage its shared resources."""
     if use_in_memory is None:
         use_in_memory = (
             os.getenv("APP_ENV", "development").strip().lower()
@@ -92,11 +91,13 @@ def create_app(
         if use_in_memory:
             store = InMemoryStore()
             checkpointer = InMemorySaver()
+            proposal_repository = InMemoryMemoryProposalRepository()
 
             configure_app_resources(
                 application=application,
                 store=store,
                 checkpointer=checkpointer,
+                proposal_repository=proposal_repository,
             )
 
             yield
@@ -106,16 +107,31 @@ def create_app(
 
         async with AsyncExitStack() as stack:
             store = await stack.enter_async_context(
-                AsyncPostgresStore.from_conn_string(
-                    postgres_uri
-                )
+                AsyncPostgresStore.from_conn_string(postgres_uri)
             )
 
             checkpointer = await stack.enter_async_context(
-                AsyncPostgresSaver.from_conn_string(
-                    postgres_uri
-                )
+                AsyncPostgresSaver.from_conn_string(postgres_uri)
             )
+
+            # This pool is created inside the worker lifecycle. It is used
+            # for transactional proposal decisions and row-level locking.
+            proposal_pool = AsyncConnectionPool(
+                conninfo=postgres_uri,
+                min_size=1,
+                max_size=5,
+                open=False,
+            )
+
+            stack.push_async_callback(proposal_pool.close)
+
+            await proposal_pool.open()
+            await proposal_pool.wait()
+
+            proposal_repository = PostgresMemoryProposalRepository(
+                pool=proposal_pool
+            )
+            await proposal_repository.setup()
 
             await store.setup()
             await checkpointer.setup()
@@ -124,12 +140,13 @@ def create_app(
                 application=application,
                 store=store,
                 checkpointer=checkpointer,
+                proposal_repository=proposal_repository,
             )
 
-            # Keep both resources open for the application lifetime.
+            # All database resources remain open for the application lifetime.
             yield
 
-        # AsyncExitStack closes the resources during shutdown.
+        # AsyncExitStack closes the proposal pool, store, and checkpointer.
 
     application = FastAPI(
         title="AI Content Copilot",
