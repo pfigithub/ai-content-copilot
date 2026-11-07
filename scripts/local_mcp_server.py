@@ -2,17 +2,16 @@
 A standalone MCP Server providing local system tools.
 This runs as a completely separate process from our API.
 """
-
 from mcp.server.fastmcp import FastMCP
 import datetime
 import os
+from pathlib import Path
 
 mcp = FastMCP("LocalSystem")
 
-# 🟢 FIX: Secure Workspace definition (prevents unauthorized access to OS files)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "workspace"))
-os.makedirs(WORKSPACE_DIR, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+WORKSPACE_DIR = (BASE_DIR / ".." / "workspace").resolve()
+WORKSPACE_DIR.mkdir(exist_ok=True)
 
 @mcp.tool()
 def get_current_time() -> str:
@@ -23,13 +22,11 @@ def get_current_time() -> str:
 def list_directory(path: str = ".") -> str:
     """List all files and folders in the designated secure workspace on the local system."""
     try:
-        target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, path))
-        
-        # 🟢 FIX: Prevent Directory Traversal (SSRF/LFI equivalent for filesystem)
-        if not target_path.startswith(WORKSPACE_DIR):
+        target_path = (WORKSPACE_DIR / path).resolve()
+        if not target_path.is_relative_to(WORKSPACE_DIR):
             return "Security Error: Access denied. You can only read files inside the designated workspace."
             
-        if not os.path.exists(target_path):
+        if not target_path.exists():
             return f"Path does not exist: {path}"
             
         files = os.listdir(target_path)
