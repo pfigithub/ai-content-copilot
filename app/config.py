@@ -1,4 +1,3 @@
-
 import re
 
 from pydantic import Field, field_validator
@@ -23,6 +22,22 @@ class Settings(BaseSettings):
 
     # Maps SHA-256 API-key digests to server-controlled user IDs.
     api_key_hashes: dict[str, str] = Field(default_factory=dict)
+
+    # JWT signing secret. MUST be overridden in production with at least
+    # 32 bytes of entropy (e.g., `python -c "import secrets; print(secrets.token_urlsafe(64))"`).
+    # An empty default keeps existing tests and the mock-provider path
+    # importable; the auth layer fails closed when it actually needs to sign.
+    jwt_secret: str = ""
+
+    # JWT issuer claim — identifies the token-issuing service.
+    jwt_issuer: str = "ai-content-copilot"
+
+    # JWT audience claim — identifies the intended recipient service.
+    jwt_audience: str = "api"
+    
+    # Root Admin Setup
+    first_superuser_username: str = "admin"
+    first_superuser_password: str = "change_this_password"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -49,6 +64,22 @@ class Settings(BaseSettings):
                     "underscores, or hyphens and must start with a letter or digit."
                 )
 
+        return value
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, value: str) -> str:
+        """Enforce minimum entropy only when a secret is actually provided.
+
+        The empty string is tolerated so existing tests and local mocks
+        can import `settings` without configuration; the auth layer is
+        responsible for refusing to sign tokens when this is empty.
+        """
+
+        if value and len(value) < 32:
+            raise ValueError(
+                "JWT_SECRET must be at least 32 characters when provided."
+            )
         return value
 
 

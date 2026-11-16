@@ -132,6 +132,14 @@ def create_app(
                 pool=proposal_pool
             )
             await proposal_repository.setup()
+            
+            # Initialize the Auth Repository and ensure Admin exists
+            from app.auth.repository import AuthRepository
+            auth_repository = AuthRepository(pool=proposal_pool)
+            await auth_repository.setup()
+            
+            # Pass the auth repo into the app state so endpoints can use it later
+            application.state.auth_repository = auth_repository
 
             await store.setup()
             await checkpointer.setup()
