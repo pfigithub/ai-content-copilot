@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
 
     # Maps SHA-256 API-key digests to server-controlled user IDs.
+    # Retained as a legacy fallback while JWT auth is being rolled out.
     api_key_hashes: dict[str, str] = Field(default_factory=dict)
 
     # JWT signing secret. MUST be overridden in production with at least
@@ -34,10 +35,12 @@ class Settings(BaseSettings):
 
     # JWT audience claim — identifies the intended recipient service.
     jwt_audience: str = "api"
-    
-    # Root Admin Setup
-    first_superuser_username: str = "admin"
-    first_superuser_password: str = "change_this_password"
+
+    # Bootstrap credentials for the first administrator. Both are left
+    # empty on purpose so a misconfigured deployment fails fast instead of
+    # silently provisioning an account with a well-known default password.
+    first_superuser_username: str = ""
+    first_superuser_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -79,6 +82,29 @@ class Settings(BaseSettings):
         if value and len(value) < 32:
             raise ValueError(
                 "JWT_SECRET must be at least 32 characters when provided."
+            )
+        return value
+
+    @field_validator("first_superuser_username")
+    @classmethod
+    def validate_superuser_username(cls, value: str) -> str:
+        """Ensure the bootstrap admin username matches the DB's VARCHAR(64)."""
+        value = (value or "").strip()
+        if value and not _USER_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                "FIRST_SUPERUSER_USERNAME must be 1-64 letters, digits, "
+                "underscores, or hyphens and start with a letter or digit."
+            )
+        return value
+
+    @field_validator("first_superuser_password")
+    @classmethod
+    def validate_superuser_password(cls, value: str) -> str:
+        """Enforce the same minimum length used by hash_password()."""
+        value = value or ""
+        if value and len(value) < 8:
+            raise ValueError(
+                "FIRST_SUPERUSER_PASSWORD must be at least 8 characters when provided."
             )
         return value
 

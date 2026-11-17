@@ -94,9 +94,15 @@ def test_authentication_fails_when_no_keys_are_configured(
     authenticated_client,
     monkeypatch,
 ):
-    """Protected endpoints must fail closed without API-key configuration."""
+    """Protected endpoints must fail closed when NO auth method is configured.
 
+    Before JWT support existed, clearing API_KEY_HASHES was enough to
+    trigger the 503 fail-closed path. With JWT as a second auth method,
+    the invariant is now "no auth method configured at all", which
+    requires clearing both API_KEY_HASHES and JWT_SECRET.
+    """
     monkeypatch.setattr(settings, "api_key_hashes", {})
+    monkeypatch.setattr(settings, "jwt_secret", "")
 
     response = authenticated_client.get(
         "/protected",

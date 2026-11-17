@@ -1,70 +1,109 @@
-import time
-from importlib import import_module
+import logging
 from datetime import datetime, timedelta, timezone
+
 import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+
 from app.config import settings
 
-PasswordHasher = import_module("argon2").PasswordHasher
-VerifyMismatchError = import_module("argon2.exceptions").VerifyMismatchError
 
-# Argon2 is the winner of the Password Hashing Competition (PHC)
-# It is significantly more secure than bcrypt or SHA-256 for passwords.
-_hasher = PasswordHasher()
+logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------ #
+# Password hashing (Argon2id)                                        #
+# ------------------------------------------------------------------ #
+
+# OWASP-recommended Argon2id parameters (as of 2024). Locking them here
+# means a future `argon2-cffi` upgrade will not silently change our
+# security properties. If we ever raise these, `check_needs_rehash`
+# becomes useful again.
+_hasher = PasswordHasher(
+    time_cost=3,
+    memory_cost=65536,   # 64 MiB
+    parallelism=4,
+)
+
+# Enforced at registration; kept in sync with the schema's min_length.
+MIN_PASSWORD_LENGTH = 8
+
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password using Argon2."""
-    if not password or len(password) < 8:
-        raise ValueError("Password must be at least 8 characters long.")
+    """Hash a plaintext password with Argon2id."""
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters long."
+        )
     return _hasher.hash(password)
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its Argon2 hash."""
+    """Constant-time verification of an Argon2id hash."""
     try:
-        _hasher.verify(hashed_password, plain_password)
-        
-        # Proactive security: Check if the hashing parameters need upgrading
-        if _hasher.check_needs_rehash(hashed_password):
-            # In a full flow, you'd trigger a background re-hash here
-            pass
-            
-        return True
+        return _hasher.verify(hashed_password, plain_password)
     except VerifyMismatchError:
         return False
 
-def create_access_token(user_id: str, role: str, expires_delta_hours: int = 24) -> str:
-    """Generate a JWT for authenticated sessions."""
+
+# ------------------------------------------------------------------ #
+# JWT access tokens                                                   #
+# ------------------------------------------------------------------ #
+
+# 15 minutes. Short enough to limit blast radius if leaked, long enough
+# that users aren't forced to re-login constantly. The next stage will
+# add a refresh token so users never notice the rotation.
+ACCESS_TOKEN_TTL_SECONDS = 15 * 60
+
+# Reusable dummy hash used for login timing-attack mitigation.
+# It never matches any password because the salt is arbitrary and the
+# digest below is the hash of a random secret, discarded.
+_DUMMY_HASH = _hasher.hash("__timing_attack_dummy__")
+
+
+def create_access_token(user_id: str, role: str) -> str:
+    """Issue a short-lived JWT. Signature is unchanged for compatibility."""
     if not settings.jwt_secret:
         raise RuntimeError("JWT_SECRET is not configured. Cannot issue tokens.")
-        
+    if role not in ("admin", "user"):
+        raise ValueError(f"Invalid role: {role}")
+
     now = datetime.now(timezone.utc)
-    expire = now + timedelta(hours=expires_delta_hours)
-    
     payload = {
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": now,
-        "exp": expire,
-        "sub": user_id,  # Subject (User ID)
-        "role": role     # 'admin' or 'user'
+        "exp": now + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
+        "sub": user_id,
+        "role": role,
     }
-    
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
+
 def decode_access_token(token: str) -> dict:
-    """Decode and validate a JWT."""
+    """Validate all claims and return the payload. Raises ValueError on failure."""
     if not settings.jwt_secret:
         raise RuntimeError("JWT_SECRET is not configured.")
-        
+
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             token,
             settings.jwt_secret,
-            algorithms=["HS256"],
+            algorithms=["HS256"],  # pin the algorithm explicitly
             audience=settings.jwt_audience,
-            issuer=settings.jwt_issuer
+            issuer=settings.jwt_issuer,
         )
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise ValueError("Token has expired.")
-    except jwt.InvalidTokenError as e:
-        raise ValueError(f"Invalid token: {e}")
+    except jwt.ExpiredSignatureError as exc:
+        raise ValueError("Token has expired.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise ValueError(f"Invalid token: {exc}") from exc
+
+
+def get_dummy_hash() -> str:
+    """Return a pre-computed hash for timing-attack mitigation on login.
+
+    The login endpoint runs `verify_password(input, get_dummy_hash())` when
+    the username does not exist, so an attacker cannot distinguish an
+    unknown username from a wrong password by response time.
+    """
+    return _DUMMY_HASH

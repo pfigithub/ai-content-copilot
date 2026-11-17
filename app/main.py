@@ -1,4 +1,3 @@
-
 import os
 
 # Enforce strict checkpoint deserialization before importing LangGraph.
@@ -17,11 +16,14 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
-from app.api.v1.endpoints.content import router as content_router
-from app.api.v1.endpoints.memory import router as memory_router
-from app.api.v1.endpoints.ingestion import router as ingestion_router
-from app.api.v1.endpoints.rag import router as rag_router
+from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.content import router as content_router
+from app.api.v1.endpoints.ingestion import router as ingestion_router
+from app.api.v1.endpoints.memory import router as memory_router
+from app.api.v1.endpoints.rag import router as rag_router
+from app.auth.memory_repository import InMemoryAuthRepository
+from app.auth.repository import AuthRepository
 from app.exception_handlers import (
     app_error_handler,
     validation_error_handler,
@@ -34,9 +36,7 @@ from app.memory.proposal_repository import (
     MemoryProposalRepository,
     PostgresMemoryProposalRepository,
 )
-from app.services.document_ingestion_service import (
-    DocumentIngestionService,
-)
+from app.services.document_ingestion_service import DocumentIngestionService
 from app.rag.rag_graph import RAGGraph
 from app.rag.research_query_planner import ResearchQueryPlanner
 from app.rag.evidence_sufficiency import EvidenceSufficiencyEvaluator
@@ -93,6 +93,14 @@ def create_app(
             checkpointer = InMemorySaver()
             proposal_repository = InMemoryMemoryProposalRepository()
 
+            # Register an in-memory auth repository so that auth
+            # endpoints and dependencies work under APP_ENV=test.
+            # Without this, protected endpoints would raise 500 because
+            # application.state.auth_repository would not exist.
+            auth_repository = InMemoryAuthRepository()
+            await auth_repository.setup()
+            application.state.auth_repository = auth_repository
+
             configure_app_resources(
                 application=application,
                 store=store,
@@ -132,13 +140,11 @@ def create_app(
                 pool=proposal_pool
             )
             await proposal_repository.setup()
-            
-            # Initialize the Auth Repository and ensure Admin exists
-            from app.auth.repository import AuthRepository
+
+            # Register the PostgreSQL-backed auth repository and
+            # ensure the bootstrap admin exists.
             auth_repository = AuthRepository(pool=proposal_pool)
             await auth_repository.setup()
-            
-            # Pass the auth repo into the app state so endpoints can use it later
             application.state.auth_repository = auth_repository
 
             await store.setup()
@@ -172,6 +178,7 @@ def create_app(
         validation_error_handler,
     )
 
+    application.include_router(auth_router)
     application.include_router(content_router)
     application.include_router(memory_router)
     application.include_router(ingestion_router)
