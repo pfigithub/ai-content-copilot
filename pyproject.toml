@@ -51,4 +51,4 @@ python_files = ["test_*.py"]
 addopts = "-ra"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "frontend*"]

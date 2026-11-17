@@ -67,11 +67,11 @@ services:
       context: .
     container_name: ai-content-copilot-frontend
     restart: unless-stopped
-    command: streamlit run frontend_app.py --server.port 8501 --server.address 0.0.0.0
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
     ports:
       - "127.0.0.1:8501:8501"
     volumes:
-      - ./frontend_app.py:/app/frontend_app.py
+      - ./frontend:/app/frontend
     environment:
       - API_BASE_URL=http://api:8000
     depends_on:

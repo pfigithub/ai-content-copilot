@@ -17,6 +17,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY frontend/ ./frontend/
 
 # Install the application and its dependencies
 RUN pip install .
