@@ -12,6 +12,8 @@ API_BASE = os.getenv(
 AUTH_LOGIN = f"{API_BASE}/api/v1/auth/login"
 AUTH_REGISTER = f"{API_BASE}/api/v1/auth/register"
 AUTH_ME = f"{API_BASE}/api/v1/auth/me"
+AUTH_REFRESH = f"{API_BASE}/api/v1/auth/refresh"
+AUTH_LOGOUT = f"{API_BASE}/api/v1/auth/logout"
 AUTH_ADMIN_USERS = f"{API_BASE}/api/v1/auth/admin/users"
 
 CHAT_URL = f"{API_BASE}/api/v1/chat/"

@@ -1,4 +1,7 @@
 import logging
+import hashlib
+import secrets
+
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -6,7 +9,6 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
 from app.config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,33 @@ def decode_access_token(token: str) -> dict:
         raise ValueError("Token has expired.") from exc
     except jwt.InvalidTokenError as exc:
         raise ValueError(f"Invalid token: {exc}") from exc
+
+# ------------------------------------------------------------------ #
+# Refresh tokens (opaque, random, hashed at rest)                    #
+# ------------------------------------------------------------------ #
+
+# 32 bytes = 256 bits. The OAuth 2.1 recommendation for opaque tokens.
+REFRESH_TOKEN_BYTES = 32
+
+# 7 days. Long enough that a normal user rarely re-types their password,
+# short enough that a stolen refresh token has a bounded lifetime.
+REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
+
+
+def create_refresh_token() -> str:
+    """Return a fresh opaque refresh token (URL-safe base64)."""
+    return secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
+
+
+def hash_refresh_token(raw: str) -> str:
+    """Hash a refresh token with SHA-256 for safe storage.
+
+    Refresh tokens carry 256 bits of entropy, so a single SHA-256 pass
+    is sufficient (Argon2 is only needed for low-entropy secrets like
+    passwords). The hash is deterministic so we can look up the token
+    by hash on refresh without ever storing the raw value.
+    """
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def get_dummy_hash() -> str:

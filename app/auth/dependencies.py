@@ -66,3 +66,14 @@ async def require_admin(
             detail="Administrator privileges required.",
         )
     return user
+
+def get_refresh_token_repository(request: Request):
+    """Retrieve the application-wide refresh token repository."""
+    repo = getattr(request.app.state, "refresh_token_repository", None)
+    if repo is None:
+        logger.error("Refresh token repository is not initialised on app.state.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Refresh token repository is not initialised.",
+        )
+    return repo

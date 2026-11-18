@@ -1,8 +1,8 @@
 """Authentication flow: login, register, session guard, inactivity.
 
-All mutable state lives in `st.session_state`. The access token is
-never written to a cookie or localStorage — Streamlit's session state
-is server-side, so even a browser inspector cannot read it.
+Token storage: both access and refresh tokens live in
+`st.session_state`, which is server-side. Nothing is written to a
+cookie or to localStorage, so a browser inspector cannot read them.
 """
 
 import time
@@ -21,18 +21,20 @@ from frontend.config import (
 
 _DEFAULTS = {
     "access_token": None,
-    "user": None,             # dict: {id, username, role, status}
-    "session_id": None,       # chat thread id (set lazily)
-    "messages": [],           # chat history
-    "last_activity": None,    # epoch seconds, for inactivity check
+    "refresh_token": None,
+    "user": None,
+    "session_id": None,
+    "messages": [],
+    "last_activity": None,
 }
 
 
 def _init_state() -> None:
     for key, value in _DEFAULTS.items():
         if key not in st.session_state:
-            # `messages` is a list; copy so different sessions don't share.
-            st.session_state[key] = list(value) if isinstance(value, list) else value
+            st.session_state[key] = (
+                list(value) if isinstance(value, list) else value
+            )
 
 
 def is_authenticated() -> bool:
@@ -45,7 +47,23 @@ def is_admin() -> bool:
 
 
 def logout(reason: str | None = None) -> None:
-    """Wipe auth state and rerun. Called by the user or on timeout."""
+    """Revoke the refresh token server-side, clear local state, rerun."""
+    refresh_token = st.session_state.get("refresh_token")
+    if refresh_token:
+        try:
+            from frontend.config import AUTH_LOGOUT
+
+            requests.post(
+                AUTH_LOGOUT,
+                json={"refresh_token": refresh_token},
+                # Short timeout: logout should never block the UI.
+                timeout=(2, 5),
+            )
+        except requests.RequestException:
+            # Revocation failure is non-fatal. The token will expire
+            # eventually; we still clear local state so the UI resets.
+            pass
+
     for key in list(_DEFAULTS.keys()):
         st.session_state.pop(key, None)
     if reason:
@@ -54,12 +72,10 @@ def logout(reason: str | None = None) -> None:
 
 
 def _touch() -> None:
-    """Update the last-activity timestamp."""
     st.session_state.last_activity = time.time()
 
 
 def _check_inactivity() -> None:
-    """Log out if the user has been idle longer than the threshold."""
     last = st.session_state.get("last_activity")
     if last is None:
         _touch()
@@ -69,27 +85,19 @@ def _check_inactivity() -> None:
 
 
 def _verify_token() -> None:
-    """Confirm the token is still valid via /auth/me."""
-    token = st.session_state.get("access_token")
-    if not token:
-        return
+    """Confirm the session is valid via /auth/me.
 
-    try:
-        response = requests.get(
-            AUTH_ME,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.RequestException:
-        # Network hiccup: keep the token, let the user retry.
-        return
+    Uses the centralised api_client so an expired access token is
+    transparently refreshed. The api_client calls `logout` itself if
+    refresh also fails, so the only 4xx we still handle here is 403
+    (suspended / deleted account).
+    """
+    from frontend.api_client import get as api_get
 
-    if response.status_code == 200:
+    response = api_get(AUTH_ME)
+
+    if response.ok:
         st.session_state.user = response.json()
-        return
-
-    if response.status_code == 401:
-        logout(reason="Your session has expired. Please log in again.")
         return
 
     if response.status_code == 403:
@@ -124,6 +132,7 @@ def _render_login() -> None:
     if response.status_code == 200:
         data = response.json()
         st.session_state.access_token = data["access_token"]
+        st.session_state.refresh_token = data.get("refresh_token")
         st.session_state.user = data.get("user")
         st.session_state.last_activity = time.time()
         st.session_state.pop("session_id", None)
@@ -226,11 +235,7 @@ def _render_register() -> None:
 
 
 def render_gate() -> None:
-    """Guard entry point: enforce auth and inactivity, else show login.
-
-    Returns only when the user is fully authenticated. Otherwise it
-    calls `st.stop()` to prevent downstream code from running.
-    """
+    """Enforce auth and inactivity, else render login. Calls st.stop()."""
     _init_state()
 
     reason = st.session_state.pop("_logout_reason", None)

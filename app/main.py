@@ -100,6 +100,17 @@ def create_app(
             auth_repository = InMemoryAuthRepository()
             await auth_repository.setup()
             application.state.auth_repository = auth_repository
+            
+            # Register an in-memory refresh token repository so that
+            # /auth/refresh and /auth/logout work under APP_ENV=test.
+            from app.auth.refresh_repository import (
+                InMemoryRefreshTokenRepository,
+            )
+            refresh_token_repository = InMemoryRefreshTokenRepository()
+            await refresh_token_repository.setup()
+            application.state.refresh_token_repository = (
+                refresh_token_repository
+            )
 
             configure_app_resources(
                 application=application,
@@ -146,6 +157,19 @@ def create_app(
             auth_repository = AuthRepository(pool=proposal_pool)
             await auth_repository.setup()
             application.state.auth_repository = auth_repository
+                        # Register the PostgreSQL-backed refresh token repository.
+            # The `refresh_sessions` table references `users`, so the
+            # auth table must already exist.
+            from app.auth.refresh_repository import (
+                PostgresRefreshTokenRepository,
+            )
+            refresh_token_repository = PostgresRefreshTokenRepository(
+                pool=proposal_pool
+            )
+            await refresh_token_repository.setup()
+            application.state.refresh_token_repository = (
+                refresh_token_repository
+            )
 
             await store.setup()
             await checkpointer.setup()

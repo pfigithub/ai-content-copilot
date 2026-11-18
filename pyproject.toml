@@ -49,6 +49,7 @@ dev = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra"
+asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
 include = ["app*", "frontend*"]

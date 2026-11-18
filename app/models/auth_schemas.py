@@ -67,12 +67,24 @@ class UserProfileResponse(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """JWT login response with the embedded public profile."""
+    """Token pair returned on login and refresh."""
 
     access_token: str
     token_type: str = "bearer"
-    # Seconds until the access token expires. Default keeps old clients
-    # working if they happen to omit the field while we migrate.
     expires_in: int = 900
-    # Optional to remain backward-compatible with in-flight code paths.
+    # Always present in the current API. Optional only so that any test
+    # fixtures or future endpoints that only care about the access token
+    # do not break.
+    refresh_token: str | None = None
     user: UserProfileResponse | None = None
+
+
+class RefreshRequest(BaseModel):
+    """Body for /auth/refresh and /auth/logout.
+
+    The token itself is a URL-safe base64 string of ~43 chars for 32
+    random bytes. The bounds below are generous but prevent a malicious
+    client from sending a 10 MB "token" to force a slow hash.
+    """
+
+    refresh_token: str = Field(..., min_length=1, max_length=200)

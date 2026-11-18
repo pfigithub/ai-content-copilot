@@ -29,3 +29,7 @@ dist/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Project dumps for review (never commit)
+full_codebase*.txt
+*_dump.txt
