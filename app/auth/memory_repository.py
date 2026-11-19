@@ -95,6 +95,17 @@ class InMemoryAuthRepository:
                 "status": status,
             }
             return dict(self._users[user_id])
+        
+    async def update_password(
+        self,
+        user_id: str,
+        new_password_hash: str,
+    ) -> bool:
+        async with self._lock:
+            if user_id not in self._users:
+                return False
+            self._users[user_id]["password_hash"] = new_password_hash
+            return True
 
     async def update_user_status(self, user_id: str, status: str) -> bool:
         if status not in VALID_STATUSES:

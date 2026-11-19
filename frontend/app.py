@@ -22,7 +22,7 @@ import streamlit as st
 
 from frontend import styles
 from frontend.auth import is_admin, logout, render_gate
-from frontend.components import admin, chat, content
+from frontend.components import admin, chat, content, profile
 
 
 st.set_page_config(
@@ -78,7 +78,7 @@ with st.sidebar:
 # Main tabs                                                          #
 # ------------------------------------------------------------------ #
 
-tab_titles = ["💬 Chat", "📝 Summarize", "🔍 Analyze", "💡 Ideas"]
+tab_titles = ["💬 Chat", "📝 Summarize", "🔍 Analyze", "💡 Ideas", " 👤 Profile",]
 if is_admin():
     tab_titles.append("🛡️ Admin")
 
@@ -92,6 +92,8 @@ with tabs[2]:
     content.render("analyze")
 with tabs[3]:
     content.render("ideas")
+with tabs[4]:
+    profile.render()
 if is_admin():
-    with tabs[4]:
+    with tabs[5]:
         admin.render()

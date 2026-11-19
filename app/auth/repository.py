@@ -171,6 +171,24 @@ class AuthRepository:
         if record is None:
             raise RuntimeError("User vanished immediately after creation.")
         return record
+    
+    async def update_password(
+        self,
+        user_id: str,
+        new_password_hash: str,
+    ) -> bool:
+        """Replace a user's password hash. Returns True if a row was updated.
+
+        We deliberately do NOT check the old hash here: that responsibility
+        belongs to the endpoint (which has access to the plaintext input).
+        The repository only knows hashes.
+        """
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                "UPDATE users SET password_hash = %s WHERE id = %s",
+                (new_password_hash, user_id),
+            )
+            return cursor.rowcount > 0
 
     async def update_user_status(self, user_id: str, status: str) -> bool:
         """Admin action: set a user's status. Returns True if a row was updated."""

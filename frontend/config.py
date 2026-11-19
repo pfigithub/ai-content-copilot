@@ -15,7 +15,7 @@ AUTH_ME = f"{API_BASE}/api/v1/auth/me"
 AUTH_REFRESH = f"{API_BASE}/api/v1/auth/refresh"
 AUTH_LOGOUT = f"{API_BASE}/api/v1/auth/logout"
 AUTH_ADMIN_USERS = f"{API_BASE}/api/v1/auth/admin/users"
-
+AUTH_CHANGE_PASSWORD = f"{API_BASE}/api/v1/auth/change-password"
 CHAT_URL = f"{API_BASE}/api/v1/chat/"
 CONTENT_ANALYZE = f"{API_BASE}/api/v1/content/analyze-content"
 CONTENT_PDF = f"{API_BASE}/api/v1/content/analyze-pdf"

@@ -88,3 +88,15 @@ class RefreshRequest(BaseModel):
     """
 
     refresh_token: str = Field(..., min_length=1, max_length=200)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Body for /auth/change-password.
+
+    Both fields are bounded to prevent oversized-payload DoS.
+    new_password must meet the same minimum length as registration
+    (enforced here at the API boundary AND in `hash_password`).
+    """
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)

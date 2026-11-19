@@ -22,6 +22,7 @@ from app.auth.security import (
     verify_password,
 )
 from app.models.auth_schemas import (
+    ChangePasswordRequest,
     RefreshRequest,
     TokenResponse,
     UserLoginRequest,
@@ -238,6 +239,77 @@ async def logout_session(
     token_hash = hash_refresh_token(request.refresh_token)
     await refresh_repo.revoke_session(token_hash)
 
+
+@router.post(
+    "/change-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def change_password(
+    request: ChangePasswordRequest,
+    user: UserRecord = Depends(get_current_user_record),
+    user_repo: AuthRepository = Depends(get_auth_repository),
+    refresh_repo=Depends(get_refresh_token_repository),
+) -> None:
+    """Change the caller's password after verifying the current one.
+
+    On success:
+      1. The stored hash is replaced with the hash of the new password.
+      2. Every refresh token belonging to this user is revoked, so all
+         devices (including the current one) are effectively logged out
+         once their 15-minute access token expires.
+
+    The current access token remains valid until it expires. We do NOT
+    maintain a JWT blocklist for this case, because the short TTL already
+    bounds the exposure to 15 minutes and a blocklist would complicate
+    every protected endpoint.
+
+    Steps are ordered so that an attacker who somehow has a valid access
+    token but NOT the current password cannot change the password:
+      1. Verify the current password first (401 on mismatch).
+      2. Refuse if the new password equals the current one (422).
+      3. Only then persist and revoke.
+    """
+    # 1. Proof of identity: the caller must know the current password.
+    if not verify_password(request.current_password, user["password_hash"]):
+        logger.warning(
+            "Failed password change attempt for user %s",
+            user["username"],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+
+    # 2. No-op guard: a user who enters the same value twice almost
+    #    certainly made a mistake. Silently accepting would be confusing.
+    if request.current_password == request.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be different from the current one.",
+        )
+
+    # 3. Hash the new password and persist it.
+    new_hash = hash_password(request.new_password)
+
+    updated = await user_repo.update_password(user["id"], new_hash)
+    if not updated:
+        # The account disappeared between the status check and the
+        # update. Treat as authentication failure, not server error.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account no longer exists.",
+        )
+
+    # 4. Revoke every refresh session for this user. This is the OWASP
+    #    ASVS 2.5.5 requirement: "verify that a password change results
+    #    in the invalidation of all other sessions".
+    revoked = await refresh_repo.revoke_all_for_user(user["id"])
+
+    logger.info(
+        "Password changed for user %s (revoked %d refresh sessions)",
+        user["username"],
+        revoked,
+    )
 
 @router.get("/me", response_model=UserProfileResponse)
 async def read_current_user(
